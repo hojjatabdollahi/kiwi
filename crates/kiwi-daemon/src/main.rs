@@ -102,6 +102,8 @@ fn create_layer_surface_for_output(
         id,
         layer: Layer::Overlay,
         keyboard_interactivity: KeyboardInteractivity::None,
+        // Empty input zone = click-through (no input accepted)
+        input_zone: Some(vec![]),
         anchor: Anchor::TOP | Anchor::RIGHT,
         output: IcedOutput::Output(output.clone()),
         namespace: "kiwi".to_string(),
