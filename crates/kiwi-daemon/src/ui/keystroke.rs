@@ -35,6 +35,9 @@ const ICON_TWO_FINGER_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-
 /// How long keystrokes stay visible before fully fading
 pub const FADE_DURATION_SECS: f32 = 5.0;
 
+/// Threshold for combining repeated keystrokes (in milliseconds)
+pub const REPEAT_THRESHOLD_MS: u128 = 200;
+
 /// Represents a keystroke to display
 #[derive(Debug, Clone)]
 pub struct Keystroke {
@@ -42,8 +45,10 @@ pub struct Keystroke {
     pub keys: Vec<String>,
     /// Whether this keystroke is currently being held
     pub pressed: bool,
-    /// When this keystroke was created
+    /// When this keystroke was created (or last repeated)
     pub timestamp: Instant,
+    /// Number of times this keystroke was repeated
+    pub count: u32,
 }
 
 /// Active modifier keys for a keystroke
@@ -85,7 +90,7 @@ impl KeyModifiers {
         if keys.is_empty() {
             None
         } else {
-            Some(Keystroke { keys, pressed, timestamp: Instant::now() })
+            Some(Keystroke { keys, pressed, timestamp: Instant::now(), count: 1 })
         }
     }
 }
@@ -97,6 +102,7 @@ impl Keystroke {
             keys: vec![key.into()],
             pressed,
             timestamp: Instant::now(),
+            count: 1,
         }
     }
 
@@ -104,7 +110,23 @@ impl Keystroke {
     pub fn combination(modifiers: &KeyModifiers, key: impl Into<String>, pressed: bool) -> Self {
         let mut keys = modifiers.to_parts();
         keys.push(key.into());
-        Self { keys, pressed, timestamp: Instant::now() }
+        Self { keys, pressed, timestamp: Instant::now(), count: 1 }
+    }
+
+    /// Check if this keystroke matches another (same keys)
+    pub fn matches(&self, other: &Self) -> bool {
+        self.keys == other.keys
+    }
+
+    /// Check if this keystroke can be merged with a new one (same keys, within threshold)
+    pub fn can_merge(&self, other: &Self) -> bool {
+        self.matches(other) && self.timestamp.elapsed().as_millis() < REPEAT_THRESHOLD_MS
+    }
+
+    /// Increment the repeat count and update timestamp
+    pub fn increment(&mut self) {
+        self.count += 1;
+        self.timestamp = Instant::now();
     }
 
     /// Create from just modifiers
@@ -269,7 +291,7 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
         }
 
         // Outer container with border, no padding, no spacing (children handle their own size)
-        widget::container(
+        let combo_widget = widget::container(
             widget::row::with_children(row_children)
                 .spacing(0)
                 .align_y(iced::Alignment::Center),
@@ -285,11 +307,28 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
                 radius: BORDER_RADIUS.into(),
             },
             ..Default::default()
-        }))
-        .into()
+        }));
+
+        // Add count badge if repeated
+        if keystroke.count > 1 {
+            let count_color = Color::from_rgba(1.0, 1.0, 1.0, 0.7 * opacity);
+            widget::column()
+                .push(combo_widget)
+                .push(
+                    text::Text::new(format!("x{}", keystroke.count))
+                        .size(10.0)
+                        .class(cosmic::theme::Text::Color(count_color))
+                        .align_x(iced::alignment::Horizontal::Center),
+                )
+                .align_x(iced::Alignment::Center)
+                .spacing(2)
+                .into()
+        } else {
+            combo_widget.into()
+        }
     } else {
         // Single key: square with border
-        widget::container(key_content(&keystroke.keys[0], text_color))
+        let key_widget = widget::container(key_content(&keystroke.keys[0], text_color))
             .width(Length::Fixed(KEY_SIZE))
             .height(Length::Fixed(KEY_SIZE))
             .align_x(iced::alignment::Horizontal::Center)
@@ -302,8 +341,25 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
                     radius: BORDER_RADIUS.into(),
                 },
                 ..Default::default()
-            }))
-            .into()
+            }));
+
+        // Add count badge if repeated
+        if keystroke.count > 1 {
+            let count_color = Color::from_rgba(1.0, 1.0, 1.0, 0.7 * opacity);
+            widget::column()
+                .push(key_widget)
+                .push(
+                    text::Text::new(format!("x{}", keystroke.count))
+                        .size(10.0)
+                        .class(cosmic::theme::Text::Color(count_color))
+                        .align_x(iced::alignment::Horizontal::Center),
+                )
+                .align_x(iced::Alignment::Center)
+                .spacing(2)
+                .into()
+        } else {
+            key_widget.into()
+        }
     }
 }
 

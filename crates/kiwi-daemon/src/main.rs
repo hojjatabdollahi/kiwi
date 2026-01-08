@@ -121,7 +121,17 @@ fn create_layer_surface_for_output(
 }
 
 /// Push a keystroke to history, limiting size
+/// If the keystroke matches the last one within the threshold, increment its count instead
 fn push_history(history: &mut Vec<Keystroke>, keystroke: Keystroke) {
+    // Check if we can merge with the last keystroke
+    if let Some(last) = history.last_mut() {
+        if last.can_merge(&keystroke) {
+            last.increment();
+            return;
+        }
+    }
+
+    // Otherwise, add as new
     if history.len() >= MAX_HISTORY {
         history.remove(0);
     }
