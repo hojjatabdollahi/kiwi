@@ -1,6 +1,5 @@
 //! COSMIC panel applet for Kiwi keystroke visualizer.
 
-use std::process::Command;
 
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::{window::Id, Length, Limits, Subscription};
@@ -12,36 +11,39 @@ use kiwi_common::{Config, PaletteType, APP_ID};
 
 const SERVICE_NAME: &str = "kiwi-daemon.service";
 
-// Embedded eye icons
-const ICON_EYE_CLOSED: &[u8] = include_bytes!("../../../data/icons/eye-closed.svg");
-const ICON_EYE_OPEN: &[u8] = include_bytes!("../../../data/icons/eye-open.svg");
+// Embedded kiwi icons for applet
+const ICON_KIWI_OFF: &[u8] = include_bytes!("../../../data/icons/kiwi-off.svg");
+const ICON_KIWI_ON: &[u8] = include_bytes!("../../../data/icons/kiwi-on.svg");
 
 /// Static palette names for dropdown (must match PaletteType::ALL order)
 const PALETTE_NAMES: &[&str] = &["Dark", "Light", "Frosted", "Kiwi"];
 
-/// Check if the daemon service is running
-fn is_daemon_running() -> bool {
-    Command::new("systemctl")
+/// Check if the daemon service is running (async)
+async fn is_daemon_running_async() -> bool {
+    tokio::process::Command::new("systemctl")
         .args(["--user", "is-active", "--quiet", SERVICE_NAME])
         .status()
+        .await
         .map(|s| s.success())
         .unwrap_or(false)
 }
 
-/// Start the daemon service
-fn start_daemon() -> bool {
-    Command::new("systemctl")
+/// Start the daemon service (async)
+async fn start_daemon_async() -> bool {
+    tokio::process::Command::new("systemctl")
         .args(["--user", "start", SERVICE_NAME])
         .status()
+        .await
         .map(|s| s.success())
         .unwrap_or(false)
 }
 
-/// Stop the daemon service
-fn stop_daemon() -> bool {
-    Command::new("systemctl")
+/// Stop the daemon service (async)
+async fn stop_daemon_async() -> bool {
+    tokio::process::Command::new("systemctl")
         .args(["--user", "stop", SERVICE_NAME])
         .status()
+        .await
         .map(|s| s.success())
         .unwrap_or(false)
 }
@@ -73,6 +75,10 @@ enum Message {
     SaveConfig,
     ConfigChanged(Config),
     RefreshDaemonStatus,
+    // Async results
+    DaemonStatusChecked(bool),
+    DaemonStarted(bool),
+    DaemonStopped(bool),
 }
 
 impl cosmic::Application for KiwiApplet {
@@ -101,18 +107,23 @@ impl cosmic::Application for KiwiApplet {
             .and_then(|h| Config::get_entry(h).ok())
             .unwrap_or_default();
 
-        let daemon_running = is_daemon_running();
-        log::info!("Loaded config: enabled={}, daemon_running={}", config.enabled, daemon_running);
-
+        // Start with unknown daemon status, check async
         let app = Self {
             core,
             popup: None,
             config,
             config_handler,
-            daemon_running,
+            daemon_running: false,  // Will be updated by async check
             pending_save: false,
         };
-        (app, Task::none())
+        
+        // Schedule async daemon status check
+        let task = cosmic::task::future(async {
+            let running = is_daemon_running_async().await;
+            cosmic::Action::App(Message::DaemonStatusChecked(running))
+        });
+        
+        (app, task)
     }
 
     fn on_close_requested(&self, id: Id) -> Option<Message> {
@@ -122,7 +133,7 @@ impl cosmic::Application for KiwiApplet {
     fn view(&self) -> Element<'_, Self::Message> {
         let is_active = self.config.enabled && self.daemon_running;
         
-        let icon_data = if is_active { ICON_EYE_OPEN } else { ICON_EYE_CLOSED };
+        let icon_data = if is_active { ICON_KIWI_ON } else { ICON_KIWI_OFF };
         
         let handle = svg::Handle::from_memory(icon_data);
         let suggested = self.core.applet.suggested_size(true);
@@ -133,16 +144,23 @@ impl cosmic::Application for KiwiApplet {
             (minor_padding, major_padding)
         };
         
-        // Apply theme color for currentColor in SVG
-        // Note: eye-open has red fill that won't use currentColor, so it stays red
-        let svg_icon = Svg::new(handle)
-            .width(Length::Fixed(suggested.0 as f32))
-            .height(Length::Fixed(suggested.1 as f32))
-            .class(cosmic::theme::Svg::Custom(std::rc::Rc::new(|theme| {
-                svg::Style {
-                    color: Some(theme.cosmic().background.on.into()),
-                }
-            })));
+        // kiwi-on: use its own colors (no theme override)
+        // kiwi-off: apply theme color
+        let svg_icon = if is_active {
+            Svg::new(handle)
+                .width(Length::Fixed(suggested.0 as f32))
+                .height(Length::Fixed(suggested.1 as f32))
+            // No .class() - use SVG's original colors
+        } else {
+            Svg::new(handle)
+                .width(Length::Fixed(suggested.0 as f32))
+                .height(Length::Fixed(suggested.1 as f32))
+                .class(cosmic::theme::Svg::Custom(std::rc::Rc::new(|theme| {
+                    svg::Style {
+                        color: Some(theme.cosmic().background.on.into()),
+                    }
+                })))
+        };
 
         widget::button::custom(
             widget::layer_container(svg_icon).center(Length::Fill)
@@ -239,34 +257,52 @@ impl cosmic::Application for KiwiApplet {
             }
             Message::ToggleActive(active) => {
                 if active {
-                    // Turning ON: start daemon if needed, then enable
+                    // Turning ON: enable config, then start daemon async if needed
+                    self.config.enabled = true;
+                    self.save_config();
+                    log::info!("Keystrokes enabled");
+                    
                     if !self.daemon_running {
                         log::info!("Starting daemon...");
-                        if start_daemon() {
-                            self.daemon_running = true;
-                            log::info!("Daemon started");
-                        } else {
-                            log::error!("Failed to start daemon");
-                            return cosmic::Task::none();
-                        }
+                        return cosmic::task::future(async {
+                            let success = start_daemon_async().await;
+                            cosmic::Action::App(Message::DaemonStarted(success))
+                        });
                     }
-                    self.config.enabled = true;
-                    log::info!("Keystrokes enabled");
                 } else {
-                    // Turning OFF: disable and stop daemon
+                    // Turning OFF: disable config, then stop daemon async
                     self.config.enabled = false;
+                    self.save_config();
                     log::info!("Keystrokes disabled");
+                    
                     if self.daemon_running {
                         log::info!("Stopping daemon...");
-                        if stop_daemon() {
-                            self.daemon_running = false;
-                            log::info!("Daemon stopped");
-                        } else {
-                            log::error!("Failed to stop daemon");
-                        }
+                        return cosmic::task::future(async {
+                            let success = stop_daemon_async().await;
+                            cosmic::Action::App(Message::DaemonStopped(success))
+                        });
                     }
                 }
-                self.save_config();
+            }
+            Message::DaemonStatusChecked(running) => {
+                log::info!("Daemon status: {}", running);
+                self.daemon_running = running;
+            }
+            Message::DaemonStarted(success) => {
+                if success {
+                    self.daemon_running = true;
+                    log::info!("Daemon started");
+                } else {
+                    log::error!("Failed to start daemon");
+                }
+            }
+            Message::DaemonStopped(success) => {
+                if success {
+                    self.daemon_running = false;
+                    log::info!("Daemon stopped");
+                } else {
+                    log::error!("Failed to stop daemon");
+                }
             }
             Message::SetKeySize(size) => {
                 self.config.key_size = size;
@@ -293,7 +329,10 @@ impl cosmic::Application for KiwiApplet {
                 self.config = config;
             }
             Message::RefreshDaemonStatus => {
-                self.daemon_running = is_daemon_running();
+                return cosmic::task::future(async {
+                    let running = is_daemon_running_async().await;
+                    cosmic::Action::App(Message::DaemonStatusChecked(running))
+                });
             }
         }
         Task::none()

@@ -44,6 +44,8 @@ struct SharedState {
     palette: kiwi_common::PaletteType,
     /// Current modifier state (live)
     modifiers: KeyModifiers,
+    /// Peak modifiers held during current modifier session (for showing full combo on release)
+    peak_modifiers: KeyModifiers,
     /// Currently pressed non-modifier key and the modifiers that were active when it was pressed
     current_key: Option<(String, KeyModifiers)>,
     /// History of completed keystrokes (released) - shown as not pressed
@@ -51,6 +53,8 @@ struct SharedState {
     /// Track if a non-modifier key was pressed while modifiers were held
     /// (to know if we should show modifier-only tap on release)
     key_pressed_with_modifiers: bool,
+    /// Currently pressed mouse button: (button_string, is_touchpad, press_time, has_moved)
+    current_mouse: Option<(String, bool, std::time::Instant, bool)>,
 }
 
 impl Default for SharedState {
@@ -62,9 +66,11 @@ impl Default for SharedState {
             fade_duration: 5.0,
             palette: kiwi_common::PaletteType::default(),
             modifiers: KeyModifiers::default(),
+            peak_modifiers: KeyModifiers::default(),
             current_key: None,
             history: Vec::new(),
             key_pressed_with_modifiers: false,
+            current_mouse: None,
         }
     }
 }
@@ -270,9 +276,11 @@ impl cosmic::Application for Kiwi {
             fade_duration: config.fade_duration,
             palette: config.palette,
             modifiers: KeyModifiers::default(),
+            peak_modifiers: KeyModifiers::default(),
             current_key: None,
             history: Vec::new(),
             key_pressed_with_modifiers: false,
+            current_mouse: None,
         }));
 
         // Start D-Bus service in background
@@ -331,6 +339,11 @@ impl cosmic::Application for Kiwi {
                                                         125 | 126 => s.modifiers.super_key = true,
                                                         _ => {}
                                                     }
+                                                    // Track peak modifiers (the full combo held together)
+                                                    s.peak_modifiers.ctrl |= s.modifiers.ctrl;
+                                                    s.peak_modifiers.alt |= s.modifiers.alt;
+                                                    s.peak_modifiers.shift |= s.modifiers.shift;
+                                                    s.peak_modifiers.super_key |= s.modifiers.super_key;
                                                     // If no key is currently pressed, modifiers are shown as "pressed"
                                                     // (handled in view by building current keystroke from state)
                                                 } else if let Some(key_str) = key_str {
@@ -354,9 +367,6 @@ impl cosmic::Application for Kiwi {
                                             }
                                             KeyState::Released => {
                                                 if is_modifier {
-                                                    // Capture modifiers before this one is released
-                                                    let mods_before = s.modifiers.clone();
-                                                    
                                                     // Update modifier state
                                                     match key {
                                                         29 | 97 => s.modifiers.ctrl = false,
@@ -366,18 +376,19 @@ impl cosmic::Application for Kiwi {
                                                         _ => {}
                                                     }
                                                     
-                                                    // If no key was pressed while modifier was held,
-                                                    // and no other key is currently pressed,
-                                                    // add the modifier tap to history
-                                                    if !s.key_pressed_with_modifiers && s.current_key.is_none() {
-                                                        if let Some(keystroke) = Keystroke::from_modifiers(&mods_before, false) {
-                                                            push_history(&mut s.history, keystroke);
-                                                        }
-                                                    }
-                                                    
-                                                    // Reset tracking when all modifiers are released
+                                                    // Only add modifier tap to history when ALL modifiers are released
+                                                    // (not when releasing one of multiple held modifiers)
                                                     if !s.modifiers.any() {
+                                                        // No modifiers left - check if this was a standalone modifier tap
+                                                        // Use peak_modifiers to get the full combo that was held
+                                                        if !s.key_pressed_with_modifiers && s.current_key.is_none() {
+                                                            if let Some(keystroke) = Keystroke::from_modifiers(&s.peak_modifiers, false) {
+                                                                push_history(&mut s.history, keystroke);
+                                                            }
+                                                        }
+                                                        // Reset tracking
                                                         s.key_pressed_with_modifiers = false;
+                                                        s.peak_modifiers = KeyModifiers::default();
                                                     }
                                                 } else if key_str.is_some() {
                                                     // Non-modifier key released
@@ -405,24 +416,57 @@ impl cosmic::Application for Kiwi {
                                             continue;
                                         }
                                         
-                                        // Only show on release (like keys)
-                                        if btn_state == kiwi_input::ButtonState::Released {
-                                            let btn_str = match (button, is_touchpad) {
-                                                (272, true) => "Tap",      // Touchpad 1-finger tap
-                                                (273, true) => "2Tap",     // Touchpad 2-finger tap
-                                                (274, true) => "3Tap",     // Touchpad 3-finger tap
-                                                (272, false) => "LClick",  // Mouse left click
-                                                (273, false) => "RClick",  // Mouse right click
-                                                (274, false) => "MClick",  // Mouse middle click
-                                                _ => continue,
-                                            };
-                                            
-                                            let keystroke = if s.modifiers.any() {
-                                                Keystroke::combination(&s.modifiers, btn_str.to_string(), false)
-                                            } else {
-                                                Keystroke::single(btn_str.to_string(), false)
-                                            };
-                                            push_history(&mut s.history, keystroke);
+                                        let btn_str = match (button, is_touchpad) {
+                                            (272, true) => "Tap",      // Touchpad 1-finger tap
+                                            (273, true) => "2Tap",     // Touchpad 2-finger tap
+                                            (274, true) => "3Tap",     // Touchpad 3-finger tap
+                                            (272, false) => "LClick",  // Mouse left click
+                                            (273, false) => "RClick",  // Mouse right click
+                                            (274, false) => "MClick",  // Mouse middle click
+                                            _ => continue,
+                                        };
+                                        
+                                        match btn_state {
+                                            kiwi_input::ButtonState::Pressed => {
+                                                // Track the pressed button with timestamp
+                                                s.current_mouse = Some((btn_str.to_string(), is_touchpad, std::time::Instant::now(), false));
+                                                // Mark that an action occurred with modifiers (prevents modifier-only tap on release)
+                                                if s.modifiers.any() {
+                                                    s.key_pressed_with_modifiers = true;
+                                                }
+                                            }
+                                            kiwi_input::ButtonState::Released => {
+                                                // Check if this was a drag (has_moved flag set by motion events)
+                                                let was_drag = s.current_mouse
+                                                    .as_ref()
+                                                    .map(|(_, _, _, has_moved)| *has_moved)
+                                                    .unwrap_or(false);
+                                                
+                                                let final_str = if was_drag && btn_str == "LClick" {
+                                                    "LDrag"
+                                                } else if was_drag && is_touchpad && btn_str == "Tap" {
+                                                    "TapDrag"
+                                                } else {
+                                                    btn_str
+                                                };
+                                                
+                                                s.current_mouse = None;
+                                                
+                                                let keystroke = if s.modifiers.any() {
+                                                    Keystroke::combination(&s.modifiers, final_str.to_string(), false)
+                                                } else {
+                                                    Keystroke::single(final_str.to_string(), false)
+                                                };
+                                                push_history(&mut s.history, keystroke);
+                                            }
+                                        }
+                                    }
+                                }
+                                InputEvent::MouseMotion { .. } => {
+                                    // Mark current mouse button as dragging if we move while pressed
+                                    if let Ok(mut s) = input_state.lock() {
+                                        if let Some((_, _, _, ref mut has_moved)) = s.current_mouse {
+                                            *has_moved = true;
                                         }
                                     }
                                 }
@@ -560,7 +604,24 @@ impl cosmic::Application for Kiwi {
                     let mut display: Vec<Keystroke> = s.history.clone();
 
                     // Build current "pressed" keystroke from state
-                    if let Some((ref key, ref key_mods)) = s.current_key {
+                    // Priority: mouse action > key > modifiers-only
+                    if let Some((ref btn_str, is_touchpad, _, has_moved)) = s.current_mouse {
+                        // Mouse button is pressed - show it (with modifiers if any)
+                        let display_str = if has_moved && btn_str == "LClick" {
+                            "LDrag".to_string()
+                        } else if has_moved && is_touchpad && btn_str == "Tap" {
+                            "TapDrag".to_string()
+                        } else {
+                            btn_str.clone()
+                        };
+                        
+                        let mouse_keystroke = if s.modifiers.any() {
+                            Keystroke::combination(&s.modifiers, display_str, true)
+                        } else {
+                            Keystroke::single(display_str, true)
+                        };
+                        display.push(mouse_keystroke);
+                    } else if let Some((ref key, ref key_mods)) = s.current_key {
                         // Key + modifiers pressed (use modifiers from when key was pressed)
                         let current = if key_mods.any() {
                             Keystroke::combination(key_mods, key.clone(), true)
@@ -569,7 +630,7 @@ impl cosmic::Application for Kiwi {
                         };
                         display.push(current);
                     } else if s.modifiers.any() {
-                        // Only modifiers pressed (no key)
+                        // Only modifiers pressed (no key, no mouse)
                         if let Some(mods_keystroke) = Keystroke::from_modifiers(&s.modifiers, true) {
                             display.push(mods_keystroke);
                         }

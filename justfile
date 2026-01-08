@@ -22,6 +22,9 @@ desktop-dst := base-dir / 'share' / 'applications' / 'dev.hojjat.kiwi.applet.des
 service-src := 'data' / 'kiwi-daemon.service'
 service-dst := base-dir / 'lib' / 'systemd' / 'user' / 'kiwi-daemon.service'
 
+icon-src := 'data' / 'icons' / 'kiwi-on.svg'
+icon-dst := base-dir / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps' / 'kiwi.svg'
+
 default: build-release
 
 # Compiles in debug mode
@@ -54,6 +57,7 @@ install:
     install -Dm0755 {{applet-src}} {{applet-dst}}
     install -Dm0644 {{desktop-src}} {{desktop-dst}}
     install -Dm0644 {{service-src}} {{service-dst}}
+    install -Dm0644 {{icon-src}} {{icon-dst}}
 
 # Uninstall files
 uninstall:
@@ -61,3 +65,4 @@ uninstall:
     rm -f {{applet-dst}}
     rm -f {{desktop-dst}}
     rm -f {{service-dst}}
+    rm -f {{icon-dst}}

@@ -78,6 +78,11 @@ pub enum InputEvent {
         /// True if from a touchpad (tap), false if from a mouse
         is_touchpad: bool,
     },
+    /// Mouse/pointer motion (used to detect drag)
+    MouseMotion {
+        dx: f64,
+        dy: f64,
+    },
     /// Mouse wheel scroll
     MouseScroll {
         axis: Axis,
@@ -223,6 +228,12 @@ impl InputCapture {
                                 button: btn.button(),
                                 state: btn.button_state(),
                                 is_touchpad,
+                            });
+                        }
+                        PointerEvent::Motion(motion) => {
+                            results.push(InputEvent::MouseMotion {
+                                dx: motion.dx(),
+                                dy: motion.dy(),
                             });
                         }
                         PointerEvent::ScrollWheel(scroll) => {

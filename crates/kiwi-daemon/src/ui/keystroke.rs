@@ -15,6 +15,7 @@ const ICON_RETURN: &[u8] = include_bytes!("../../../../data/icons/kiwi-return-sy
 const ICON_BACKSPACE: &[u8] = include_bytes!("../../../../data/icons/kiwi-backspace-symbolic.svg");
 const ICON_SHIFT: &[u8] = include_bytes!("../../../../data/icons/kiwi-shift-symbolic.svg");
 const ICON_CTRL: &[u8] = include_bytes!("../../../../data/icons/kiwi-control-symbolic.svg");
+const ICON_ALT: &[u8] = include_bytes!("../../../../data/icons/kiwi-alt.svg");
 const ICON_TAB: &[u8] = include_bytes!("../../../../data/icons/kiwi-tab-symbolic.svg");
 const ICON_SPACE: &[u8] = include_bytes!("../../../../data/icons/kiwi-space-symbolic.svg");
 const ICON_CAPS: &[u8] = include_bytes!("../../../../data/icons/kiwi-capslock-symbolic.svg");
@@ -22,7 +23,7 @@ const ICON_SUPER: &[u8] = include_bytes!("../../../../data/icons/kiwi-super-symb
 const ICON_ESCAPE: &[u8] = include_bytes!("../../../../data/icons/kiwi-escape-symbolic.svg");
 const ICON_LEFT_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-left-click-symbolic.svg");
 const ICON_RIGHT_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-right-click-symbolic.svg");
-const ICON_SCROLL_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-click-symbolic.svg");
+const ICON_MIDDLE_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-middle-click-symbolic.svg");
 const ICON_SCROLL_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-up-symbolic.svg");
 const ICON_SCROLL_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-down-symbolic.svg");
 // Touchpad gestures
@@ -38,6 +39,10 @@ const ICON_THREE_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-three
 const ICON_FOUR_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-four-tap.svg");
 const ICON_FOUR_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-four-up.svg");
 const ICON_FOUR_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-four-down.svg");
+// Special emblems and drag icons
+const ICON_PRESSED_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-pressed-down.svg");
+const ICON_CLICK_DRAG: &[u8] = include_bytes!("../../../../data/icons/kiwi-click-drag.svg");
+const ICON_TAP_DRAG: &[u8] = include_bytes!("../../../../data/icons/kiwi-tap-drag.svg");
 
 
 
@@ -328,6 +333,7 @@ fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
         "⌫" => Some((ICON_BACKSPACE, true)),
         "⇧" => Some((ICON_SHIFT, true)),
         "Ctrl" => Some((ICON_CTRL, true)),
+        "Alt" => Some((ICON_ALT, true)),
         "Tab" => Some((ICON_TAB, true)),
         "␣" => Some((ICON_SPACE, true)),
         "Caps" => Some((ICON_CAPS, true)),
@@ -336,7 +342,7 @@ fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
         // Mouse
         "LClick" => Some((ICON_LEFT_CLICK, true)),
         "RClick" => Some((ICON_RIGHT_CLICK, true)),
-        "MClick" => Some((ICON_SCROLL_CLICK, true)),
+        "MClick" => Some((ICON_MIDDLE_CLICK, true)),
         "ScrollUp" => Some((ICON_SCROLL_UP, true)),
         "ScrollDown" => Some((ICON_SCROLL_DOWN, true)),
         // Touchpad gestures
@@ -352,6 +358,9 @@ fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
         "4Tap" => Some((ICON_FOUR_TAP, true)),
         "4Up" => Some((ICON_FOUR_UP, true)),
         "4Down" => Some((ICON_FOUR_DOWN, true)),
+        // Drag gestures
+        "LDrag" => Some((ICON_CLICK_DRAG, true)),
+        "TapDrag" => Some((ICON_TAP_DRAG, true)),
         _ => None,
     }
 }
@@ -383,6 +392,40 @@ fn key_content<'a, M: 'a>(key: &str, text_color: Color, key_size: f32) -> Elemen
             .align_x(iced::alignment::Horizontal::Center)
             .align_y(iced::alignment::Vertical::Center)
             .into()
+    }
+}
+
+/// Creates the pressed-down emblem - a small icon at bottom of a pressed key
+fn pressed_emblem<'a, M: 'a>(text_color: Color, emblem_size: f32) -> Element<'a, M> {
+    let handle = svg::Handle::from_memory(ICON_PRESSED_DOWN);
+    Svg::new(handle)
+        .width(Length::Fixed(emblem_size))
+        .height(Length::Fixed(emblem_size))
+        .class(cosmic::theme::Svg::custom(move |_| svg::Style {
+            color: Some(text_color),
+        }))
+        .into()
+}
+
+/// Wraps key content with the pressed emblem at the bottom if pressed
+fn key_content_with_emblem<'a, M: 'a>(
+    key: &str, 
+    text_color: Color, 
+    key_size: f32, 
+    pressed: bool,
+) -> Element<'a, M> {
+    let content = key_content(key, text_color, key_size);
+    
+    if pressed {
+        let emblem_size = key_size * 0.3;
+        widget::column()
+            .push(content)
+            .push(pressed_emblem(text_color, emblem_size))
+            .align_x(iced::Alignment::Center)
+            .spacing(0)
+            .into()
+    } else {
+        content
     }
 }
 
@@ -439,9 +482,9 @@ pub fn keystroke_widget<'a, M: 'a>(
                     .into(),
                 );
             }
-            // Key box: key_size square, no border, centered content (text or icon)
+            // Key box: key_size square, no border, centered content (text or icon + emblem if pressed)
             row_children.push(
-                widget::container(key_content(key, text_color, key_size))
+                widget::container(key_content_with_emblem(key, text_color, key_size, keystroke.pressed))
                     .width(Length::Fixed(key_size))
                     .height(Length::Fixed(key_size))
                     .align_x(iced::alignment::Horizontal::Center)
@@ -500,7 +543,9 @@ pub fn keystroke_widget<'a, M: 'a>(
         }
     } else {
         // Single key: square with border
-        let key_widget = widget::container(key_content(&keystroke.keys[0], text_color, key_size))
+        let key_widget = widget::container(
+            key_content_with_emblem(&keystroke.keys[0], text_color, key_size, keystroke.pressed)
+        )
             .width(Length::Fixed(key_size))
             .height(Length::Fixed(key_size))
             .align_x(iced::alignment::Horizontal::Center)
