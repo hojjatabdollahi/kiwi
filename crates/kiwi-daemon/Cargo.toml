@@ -1,0 +1,21 @@
+[package]
+name = "kiwi-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Layer-shell overlay daemon for Kiwi keystroke visualizer"
+
+[features]
+default = ["wgpu"]
+wgpu = ["libcosmic/wgpu"]
+
+[dependencies]
+env_logger.workspace = true
+log.workspace = true
+wayland-client.workspace = true
+cosmic-client-toolkit.workspace = true
+kiwi-common.workspace = true
+
+[dependencies.libcosmic]
+workspace = true
+features = ["multi-window", "wayland", "winit"]

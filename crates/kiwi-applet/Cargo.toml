@@ -1,0 +1,23 @@
+[package]
+name = "kiwi-applet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "COSMIC panel applet for Kiwi keystroke visualizer"
+
+[dependencies]
+env_logger.workspace = true
+log.workspace = true
+kiwi-common.workspace = true
+
+[dependencies.libcosmic]
+workspace = true
+features = [
+    "applet",
+    "applet-token",
+    "dbus-config",
+    "multi-window",
+    "tokio",
+    "wayland",
+    "winit",
+]

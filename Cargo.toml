@@ -1,22 +1,38 @@
-[package]
-name = "kiwi"
+[workspace]
+resolver = "2"
+members = [
+    "crates/kiwi-daemon",
+    "crates/kiwi-applet",
+    "crates/kiwi-common",
+    "crates/kiwi-input",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "Keystroke visualizer overlay for COSMIC desktop"
+license = "GPL-3.0-or-later"
+authors = ["Hojjat"]
 
-[features]
-default = ["wgpu"]
-wgpu = ["cosmic/wgpu"]
-
-[dependencies]
-env_logger = "0.11"
-log = "0.4"
+[workspace.dependencies]
+# Shared COSMIC/iced dependencies
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", branch = "main" }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
+libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false }
 wayland-client = "0.31"
 
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", branch = "main" }
+# Logging
+env_logger = "0.11"
+log = "0.4"
 
-[dependencies.cosmic]
-package = "libcosmic"
-git = "https://github.com/pop-os/libcosmic"
-default-features = false
-features = ["multi-window", "wayland", "wgpu", "winit"]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+
+# IPC
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+# Async
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+
+# Internal crates
+kiwi-common = { path = "crates/kiwi-common" }
+kiwi-input = { path = "crates/kiwi-input" }
