@@ -3,13 +3,18 @@
 use std::process::Command;
 
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
-use cosmic::iced::{window::Id, Limits, Subscription};
+use cosmic::iced::{window::Id, Length, Limits, Subscription};
+use cosmic::iced_widget::svg::{self, Svg};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::prelude::*;
 use cosmic::widget;
 use kiwi_common::{Config, PaletteType, APP_ID};
 
 const SERVICE_NAME: &str = "kiwi-daemon.service";
+
+// Embedded eye icons
+const ICON_EYE_CLOSED: &[u8] = include_bytes!("../../../data/icons/eye-closed.svg");
+const ICON_EYE_OPEN: &[u8] = include_bytes!("../../../data/icons/eye-open.svg");
 
 /// Static palette names for dropdown (must match PaletteType::ALL order)
 const PALETTE_NAMES: &[&str] = &["Dark", "Light", "Frosted", "Kiwi"];
@@ -61,8 +66,7 @@ struct KiwiApplet {
 enum Message {
     TogglePopup,
     PopupClosed(Id),
-    ToggleEnabled(bool),
-    ToggleDaemon(bool),
+    ToggleActive(bool),  // Combined: starts/stops daemon and enables/disables
     SetKeySize(f32),
     SetFadeDuration(f32),
     SetPaletteIndex(usize),
@@ -116,20 +120,38 @@ impl cosmic::Application for KiwiApplet {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        // Eye icon with red recording dot indicates active keystroke visualization
-        let icon_name = if self.config.enabled && self.daemon_running {
-            "eye-open-negative-filled-symbolic"  // Active: eye with red dot
-        } else if self.daemon_running {
-            "eye-not-looking-symbolic"  // Daemon running but disabled
+        let is_active = self.config.enabled && self.daemon_running;
+        
+        let icon_data = if is_active { ICON_EYE_OPEN } else { ICON_EYE_CLOSED };
+        
+        let handle = svg::Handle::from_memory(icon_data);
+        let suggested = self.core.applet.suggested_size(true);
+        let (major_padding, minor_padding) = self.core.applet.suggested_padding(true);
+        let (horizontal_padding, vertical_padding) = if self.core.applet.is_horizontal() {
+            (major_padding, minor_padding)
         } else {
-            "eye-open-symbolic"  // Daemon not running
+            (minor_padding, major_padding)
         };
+        
+        // Apply theme color for currentColor in SVG
+        // Note: eye-open has red fill that won't use currentColor, so it stays red
+        let svg_icon = Svg::new(handle)
+            .width(Length::Fixed(suggested.0 as f32))
+            .height(Length::Fixed(suggested.1 as f32))
+            .class(cosmic::theme::Svg::Custom(std::rc::Rc::new(|theme| {
+                svg::Style {
+                    color: Some(theme.cosmic().background.on.into()),
+                }
+            })));
 
-        self.core
-            .applet
-            .icon_button(icon_name)
-            .on_press(Message::TogglePopup)
-            .into()
+        widget::button::custom(
+            widget::layer_container(svg_icon).center(Length::Fill)
+        )
+        .width(Length::Fixed((suggested.0 + 2 * horizontal_padding) as f32))
+        .height(Length::Fixed((suggested.1 + 2 * vertical_padding) as f32))
+        .class(cosmic::theme::Button::AppletIcon)
+        .on_press(Message::TogglePopup)
+        .into()
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
@@ -138,16 +160,15 @@ impl cosmic::Application for KiwiApplet {
             .iter()
             .position(|p| *p == self.config.palette);
 
+        // Active = daemon running AND enabled
+        let is_active = self.daemon_running && self.config.enabled;
+        
         let content_list = widget::list_column()
             .padding(5)
             .spacing(0)
             .add(widget::settings::item(
-                "Daemon",
-                widget::toggler(self.daemon_running).on_toggle(Message::ToggleDaemon),
-            ))
-            .add(widget::settings::item(
-                "Show Keys",
-                widget::toggler(self.config.enabled).on_toggle(Message::ToggleEnabled),
+                "Active",
+                widget::toggler(is_active).on_toggle(Message::ToggleActive),
             ))
             .add(widget::settings::item(
                 format!("Size: {:.0}", self.config.key_size),
@@ -216,9 +237,35 @@ impl cosmic::Application for KiwiApplet {
                     self.popup = None;
                 }
             }
-            Message::ToggleEnabled(enabled) => {
-                self.config.enabled = enabled;
-                log::info!("Keystrokes enabled: {}", enabled);
+            Message::ToggleActive(active) => {
+                if active {
+                    // Turning ON: start daemon if needed, then enable
+                    if !self.daemon_running {
+                        log::info!("Starting daemon...");
+                        if start_daemon() {
+                            self.daemon_running = true;
+                            log::info!("Daemon started");
+                        } else {
+                            log::error!("Failed to start daemon");
+                            return cosmic::Task::none();
+                        }
+                    }
+                    self.config.enabled = true;
+                    log::info!("Keystrokes enabled");
+                } else {
+                    // Turning OFF: disable and stop daemon
+                    self.config.enabled = false;
+                    log::info!("Keystrokes disabled");
+                    if self.daemon_running {
+                        log::info!("Stopping daemon...");
+                        if stop_daemon() {
+                            self.daemon_running = false;
+                            log::info!("Daemon stopped");
+                        } else {
+                            log::error!("Failed to stop daemon");
+                        }
+                    }
+                }
                 self.save_config();
             }
             Message::SetKeySize(size) => {
@@ -244,25 +291,6 @@ impl cosmic::Application for KiwiApplet {
             Message::ConfigChanged(config) => {
                 log::info!("Config changed externally: enabled={}", config.enabled);
                 self.config = config;
-            }
-            Message::ToggleDaemon(start) => {
-                if start {
-                    log::info!("Starting daemon...");
-                    if start_daemon() {
-                        self.daemon_running = true;
-                        log::info!("Daemon started");
-                    } else {
-                        log::error!("Failed to start daemon");
-                    }
-                } else {
-                    log::info!("Stopping daemon...");
-                    if stop_daemon() {
-                        self.daemon_running = false;
-                        log::info!("Daemon stopped");
-                    } else {
-                        log::error!("Failed to stop daemon");
-                    }
-                }
             }
             Message::RefreshDaemonStatus => {
                 self.daemon_running = is_daemon_running();
