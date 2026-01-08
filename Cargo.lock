@@ -2563,6 +2563,7 @@ dependencies = [
  "env_logger",
  "libcosmic",
  "log",
+ "wayland-client",
 ]
 
 [[package]]
