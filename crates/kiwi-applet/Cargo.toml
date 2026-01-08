@@ -9,6 +9,8 @@ description = "COSMIC panel applet for Kiwi keystroke visualizer"
 env_logger.workspace = true
 log.workspace = true
 kiwi-common.workspace = true
+zbus.workspace = true
+tokio.workspace = true
 
 [dependencies.libcosmic]
 workspace = true

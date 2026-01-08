@@ -8,3 +8,6 @@ description = "Keystroke capture via libinput/evdev for Kiwi"
 [dependencies]
 log.workspace = true
 kiwi-common.workspace = true
+input.workspace = true
+udev.workspace = true
+libc.workspace = true

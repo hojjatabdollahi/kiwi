@@ -9,3 +9,4 @@ description = "Shared types, config, and IPC for Kiwi keystroke visualizer"
 serde.workspace = true
 log.workspace = true
 cosmic-config.workspace = true
+zbus.workspace = true

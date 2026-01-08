@@ -15,7 +15,10 @@ log.workspace = true
 wayland-client.workspace = true
 cosmic-client-toolkit.workspace = true
 kiwi-common.workspace = true
+kiwi-input.workspace = true
+zbus.workspace = true
+tokio.workspace = true
 
 [dependencies.libcosmic]
 workspace = true
-features = ["multi-window", "wayland", "winit"]
+features = ["multi-window", "wayland", "winit", "tokio"]

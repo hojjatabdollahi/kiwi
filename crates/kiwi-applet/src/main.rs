@@ -1,23 +1,36 @@
 //! COSMIC panel applet for Kiwi keystroke visualizer.
 
+use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::{window::Id, Limits, Subscription};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::prelude::*;
 use cosmic::widget;
-use kiwi_common::{Config, APP_ID};
+use kiwi_common::{Config, KiwiProxy, APP_ID};
 
 fn main() -> cosmic::iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     cosmic::applet::run::<KiwiApplet>(())
 }
 
+/// Connection state to the daemon
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DaemonState {
+    Unknown,
+    Connected,
+    Disconnected,
+}
+
 struct KiwiApplet {
     core: cosmic::Core,
     popup: Option<Id>,
     config: Config,
-    #[allow(dead_code)]
     config_handler: Option<cosmic_config::Config>,
+    daemon_state: Arc<Mutex<DaemonState>>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +39,68 @@ enum Message {
     PopupClosed(Id),
     ToggleEnabled(bool),
     ConfigChanged(Config),
+    Tick,
+}
+
+/// Spawn the daemon process
+fn spawn_daemon() {
+    log::info!("Spawning kiwi-daemon...");
+    match Command::new("kiwi-daemon").spawn() {
+        Ok(_) => log::info!("Daemon spawned"),
+        Err(e) => log::error!("Failed to spawn daemon: {}", e),
+    }
+}
+
+/// Try to connect to daemon and set enabled state
+fn try_set_enabled(enabled: bool, daemon_state: Arc<Mutex<DaemonState>>) {
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let connection = match zbus::Connection::session().await {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("Failed to connect to D-Bus session: {}", e);
+                    return;
+                }
+            };
+
+            let proxy = match KiwiProxy::new(&connection).await {
+                Ok(p) => p,
+                Err(_) => {
+                    if enabled {
+                        spawn_daemon();
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        
+                        match KiwiProxy::new(&connection).await {
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::error!("Failed to connect to daemon after spawn: {}", e);
+                                if let Ok(mut state) = daemon_state.lock() {
+                                    *state = DaemonState::Disconnected;
+                                }
+                                return;
+                            }
+                        }
+                    } else {
+                        if let Ok(mut state) = daemon_state.lock() {
+                            *state = DaemonState::Disconnected;
+                        }
+                        return;
+                    }
+                }
+            };
+
+            if let Err(e) = proxy.set_enabled(enabled).await {
+                log::error!("Failed to set enabled: {}", e);
+            } else {
+                log::info!("Daemon set_enabled({}) success", enabled);
+            }
+
+            if let Ok(mut state) = daemon_state.lock() {
+                *state = DaemonState::Connected;
+            }
+        });
+    });
 }
 
 impl cosmic::Application for KiwiApplet {
@@ -47,7 +122,6 @@ impl cosmic::Application for KiwiApplet {
         core: cosmic::Core,
         _flags: Self::Flags,
     ) -> (Self, Task<cosmic::Action<Self::Message>>) {
-        // Load config from cosmic-config
         let config_handler = cosmic_config::Config::new(APP_ID, Config::VERSION).ok();
         let config = config_handler
             .as_ref()
@@ -56,11 +130,18 @@ impl cosmic::Application for KiwiApplet {
 
         log::info!("Loaded config: enabled={}", config.enabled);
 
+        let daemon_state = Arc::new(Mutex::new(DaemonState::Unknown));
+
+        if config.enabled {
+            try_set_enabled(true, daemon_state.clone());
+        }
+
         let app = Self {
             core,
             popup: None,
             config,
             config_handler,
+            daemon_state,
         };
         (app, Task::none())
     }
@@ -70,11 +151,10 @@ impl cosmic::Application for KiwiApplet {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        // Different icon based on enabled state
         let icon_name = if self.config.enabled {
-            "keyboard-brightness-symbolic" // "active" looking icon
+            "keyboard-brightness-symbolic"
         } else {
-            "input-keyboard-symbolic" // regular keyboard
+            "input-keyboard-symbolic"
         };
 
         self.core
@@ -85,22 +165,36 @@ impl cosmic::Application for KiwiApplet {
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
+        let daemon_status = match self.daemon_state.lock() {
+            Ok(state) => match *state {
+                DaemonState::Connected => "Connected",
+                DaemonState::Disconnected => "Disconnected",
+                DaemonState::Unknown => "...",
+            },
+            Err(_) => "Error",
+        };
+
         let content_list = widget::list_column()
             .padding(5)
-            .spacing(0)
+            .spacing(5)
             .add(widget::settings::item(
                 "Enabled",
                 widget::toggler(self.config.enabled).on_toggle(Message::ToggleEnabled),
-            ));
+            ))
+            .add(widget::text::caption(format!("Daemon: {}", daemon_status)));
 
         self.core.applet.popup_container(content_list).into()
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        // Watch for config changes from other processes
-        self.core()
-            .watch_config::<Config>(APP_ID)
-            .map(|update| Message::ConfigChanged(update.config))
+        use cosmic::iced::time;
+        
+        Subscription::batch([
+            self.core()
+                .watch_config::<Config>(APP_ID)
+                .map(|update| Message::ConfigChanged(update.config)),
+            time::every(Duration::from_secs(2)).map(|_| Message::Tick),
+        ])
     }
 
     fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
@@ -121,7 +215,7 @@ impl cosmic::Application for KiwiApplet {
                     popup_settings.positioner.size_limits = Limits::NONE
                         .max_width(300.0)
                         .min_width(200.0)
-                        .min_height(80.0)
+                        .min_height(100.0)
                         .max_height(400.0);
                     get_popup(popup_settings)
                 }
@@ -135,18 +229,23 @@ impl cosmic::Application for KiwiApplet {
                 self.config.enabled = enabled;
                 log::info!("Keystrokes enabled: {}", enabled);
                 
-                // Save config
                 if let Some(ref handler) = self.config_handler {
                     if let Err(e) = self.config.write_entry(handler) {
                         log::error!("Failed to save config: {}", e);
-                    } else {
-                        log::info!("Config saved: enabled={}", enabled);
                     }
                 }
+
+                try_set_enabled(enabled, self.daemon_state.clone());
             }
             Message::ConfigChanged(config) => {
                 log::info!("Config changed externally: enabled={}", config.enabled);
+                if self.config.enabled != config.enabled {
+                    try_set_enabled(config.enabled, self.daemon_state.clone());
+                }
                 self.config = config;
+            }
+            Message::Tick => {
+                // Periodic check - could verify daemon is still running
             }
         }
         Task::none()

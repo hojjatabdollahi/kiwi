@@ -11,13 +11,12 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-authors = ["Hojjat"]
 
 [workspace.dependencies]
-# Shared COSMIC/iced dependencies
+# COSMIC/iced
+libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", branch = "main" }
 cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
-libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false }
 wayland-client = "0.31"
 
 # Logging
@@ -32,6 +31,11 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 # Async
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
+
+# Input capture
+input = "0.9"
+udev = "0.9"
+libc = "0.2"
 
 # Internal crates
 kiwi-common = { path = "crates/kiwi-common" }
