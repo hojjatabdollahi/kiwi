@@ -547,8 +547,8 @@ pub fn keystroke_widget<'a, M: 'a>(
     }
 }
 
-// Available width for keystrokes (window width minus padding)
-const AVAILABLE_WIDTH: f32 = 800.0 - 40.0; // 800px window - margins
+// Margin/padding inside the window
+const WINDOW_MARGIN: f32 = 40.0;
 
 impl Keystroke {
     /// Estimate the width of this keystroke widget
@@ -571,7 +571,9 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     key_size: f32, 
     fade_duration: f32,
     palette_type: PaletteType,
+    window_width: f32,
 ) -> Element<'a, M> {
+    let available_width = window_width - WINDOW_MARGIN;
     let mut total_width: f32 = 0.0;
     let mut fitting_keystrokes: Vec<&Keystroke> = Vec::new();
 
@@ -585,7 +587,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         let width = keystroke.estimated_width(key_size);
         let gap = if fitting_keystrokes.is_empty() { 0.0 } else { KEY_GAP };
         
-        if total_width + gap + width <= AVAILABLE_WIDTH {
+        if total_width + gap + width <= available_width {
             total_width += gap + width;
             fitting_keystrokes.push(keystroke);
         } else {

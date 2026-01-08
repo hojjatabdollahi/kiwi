@@ -116,11 +116,13 @@ impl cosmic::Application for KiwiApplet {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        // Different icon based on enabled state
-        let icon_name = if self.config.enabled {
-            "keyboard-brightness-symbolic" // "active" looking icon
+        // Eye icon with red recording dot indicates active keystroke visualization
+        let icon_name = if self.config.enabled && self.daemon_running {
+            "eye-open-negative-filled-symbolic"  // Active: eye with red dot
+        } else if self.daemon_running {
+            "eye-not-looking-symbolic"  // Daemon running but disabled
         } else {
-            "input-keyboard-symbolic" // regular keyboard
+            "eye-open-symbolic"  // Daemon not running
         };
 
         self.core

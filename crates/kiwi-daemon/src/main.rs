@@ -103,6 +103,7 @@ struct OutputState {
     output: WlOutput,
     surface_id: window::Id,
     name: Option<String>,
+    width: u32,  // Window width for this output
 }
 
 struct Kiwi {
@@ -127,17 +128,25 @@ fn window_height_for_key_size(key_size: f32) -> u32 {
     (key_size + spacing + count_height + padding).max(60.0) as u32
 }
 
+/// Calculate window width based on key_size (fits ~12 keys + gaps)
+fn window_width_for_key_size(key_size: f32) -> u32 {
+    // Enough space for about 12 single keys with gaps, or ~6 combos
+    let key_gap = 4.0;
+    let margin = 40.0;
+    let num_keys = 12.0;
+    let width = (key_size * num_keys) + (key_gap * (num_keys - 1.0)) + margin;
+    width.max(400.0).min(1600.0) as u32  // Clamp between 400-1600
+}
+
 fn create_layer_surface_for_output(
     output: &WlOutput,
     id: window::Id,
     key_size: f32,
-) -> cosmic::iced::Task<cosmic::Action<Message>> {
-    // Width: None means stretch to anchor edges, or use a large fixed width
-    // We anchor to RIGHT so we need a fixed width
-    let width = 800u32.max(300);  // Reasonable width for keystrokes
+) -> (cosmic::iced::Task<cosmic::Action<Message>>, u32) {
+    let width = window_width_for_key_size(key_size);
     let height = window_height_for_key_size(key_size);
     
-    get_layer_surface(SctkLayerSurfaceSettings {
+    let task = get_layer_surface(SctkLayerSurfaceSettings {
         id,
         layer: Layer::Overlay,
         keyboard_interactivity: KeyboardInteractivity::None,
@@ -156,7 +165,8 @@ fn create_layer_surface_for_output(
         exclusive_zone: -1,
         size_limits: Limits::NONE.min_width(300.0).min_height(1.0),
         ..Default::default()
-    })
+    });
+    (task, width)
 }
 
 /// Push a keystroke to history, limiting size
@@ -537,7 +547,9 @@ impl cosmic::Application for Kiwi {
     }
 
     fn view_window(&self, id: window::Id) -> cosmic::Element<'_, Self::Message> {
-        if self.outputs.iter().any(|o| o.surface_id == id) {
+        if let Some(output) = self.outputs.iter().find(|o| o.surface_id == id) {
+            let window_width = output.width as f32;
+            
             let (keystrokes, key_size, fade_duration, palette) = self.state
                 .lock()
                 .map(|s| {
@@ -574,7 +586,7 @@ impl cosmic::Application for Kiwi {
             } else {
                 // Show keystrokes row with clipping (spacer inside pushes to right)
                 // Width::Fill needed for spacer to expand, but row items keep natural size
-                ui::keystrokes_row(&keystrokes, key_size, fade_duration, palette)
+                ui::keystrokes_row(&keystrokes, key_size, fade_duration, palette, window_width)
             }
         } else {
             cosmic::widget::text("").into()
@@ -591,13 +603,15 @@ impl cosmic::Application for Kiwi {
                     let key_size = self.state.lock().map(|s| s.key_size).unwrap_or(36.0);
                     
                     let surface_id = window::Id::unique();
+                    let (task, width) = create_layer_surface_for_output(&wl_output, surface_id, key_size);
                     self.outputs.push(OutputState {
                         output: wl_output.clone(),
                         surface_id,
                         name,
+                        width,
                     });
                     
-                    return create_layer_surface_for_output(&wl_output, surface_id, key_size);
+                    return task;
                 }
                 OutputEvent::Removed => {
                     if let Some(idx) = self.outputs.iter().position(|o| o.output == wl_output) {
@@ -648,11 +662,13 @@ impl cosmic::Application for Kiwi {
                         // Create new surface with new ID
                         let new_id = window::Id::unique();
                         output_state.surface_id = new_id;
-                        tasks.push(create_layer_surface_for_output(
+                        let (task, width) = create_layer_surface_for_output(
                             &output_state.output,
                             new_id,
                             config.key_size,
-                        ));
+                        );
+                        output_state.width = width;
+                        tasks.push(task);
                     }
                     
                     return cosmic::iced::Task::batch(tasks);
