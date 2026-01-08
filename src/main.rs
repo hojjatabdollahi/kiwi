@@ -59,7 +59,7 @@ struct KiwiApp {
     tray_rx: CbReceiver<tray::TrayAction>,
     /// Handle to keep tray alive
     #[allow(dead_code)]
-    tray_handle: Option<ksni::Handle<tray::KiwiTray>>,
+    tray_handle: Option<tray::TrayHandle>,
     /// Shared state for overlay (keystrokes, modifiers, etc.)
     shared_state: Arc<Mutex<SharedState>>,
     /// Wayland outputs with layer surfaces

@@ -1,13 +1,13 @@
 //! Settings window view and related logic
 
-use cosmic::iced::Length;
+use cosmic::iced::{Color, Length};
 use cosmic::iced_widget::svg;
 use cosmic::iced_widget::Svg;
 use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::widget::scrollable;
 
-use crate::config::{OverlayPosition, PaletteType};
+use crate::config::{OverlayPosition, PaletteType, APP_VERSION};
 use crate::keystroke::{keystroke_widget, Keystroke};
 use crate::position_selector::PositionSelector;
 use crate::Message;
@@ -35,8 +35,8 @@ pub fn settings_view(
     // Find current selection index
     let current_index = PaletteType::ALL.iter().position(|p| *p == palette);
 
-    // Position selector widget (larger size)
-    let position_selector = PositionSelector::new(160.0, position, Message::SetPosition);
+    // Position selector widget (larger size for better visibility)
+    let position_selector = PositionSelector::new(200.0, position, Message::SetPosition);
 
     // Sample keystroke preview (scales with slider, cap at 250 for window)
     let preview_size = key_size.min(250.0);
@@ -83,6 +83,7 @@ pub fn settings_view(
     let content = widget::column()
         .padding(10)
         .spacing(8)
+        .max_width(300.0)
         // Active toggle at top
         .push(
             widget::row()
@@ -130,13 +131,32 @@ pub fn settings_view(
         // Position selector (centered, no label, with padding)
         .push(position_container);
 
-    // Wrap content in scrollable so all widgets are accessible
-    widget::container(
-        scrollable(content)
-            .width(Length::Fill)
-            .height(Length::Fill),
+    // Version text (bottom right)
+    let version_text = widget::text::caption(format!("v{}", APP_VERSION))
+        .class(cosmic::theme::Text::Color(Color::from_rgba(0.5, 0.5, 0.5, 0.8)));
+
+    // Wrap content in scrollable and center it (with clipping to prevent overflow into header)
+    let scrollable_content = widget::container(
+        scrollable(
+            widget::container(content)
+                .width(Length::Fill)
+                .align_x(cosmic::iced::alignment::Horizontal::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill),
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .into()
+    .clip(true);
+
+    // Main layout: scrollable content + version at bottom right
+    widget::column()
+        .push(scrollable_content)
+        .push(
+            widget::container(version_text)
+                .width(Length::Fill)
+                .align_x(cosmic::iced::alignment::Horizontal::Right)
+                .padding([0, 10, 5, 0]),
+        )
+        .into()
 }

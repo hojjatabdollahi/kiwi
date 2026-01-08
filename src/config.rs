@@ -9,6 +9,7 @@ pub use cosmic::iced::Color;
 
 /// The APP_ID used for cosmic-config
 pub const APP_ID: &str = "dev.hojjat.kiwi";
+pub const APP_VERSION: &str = "0.1.0";
 
 /// Color palette preset for keystroke visualization
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

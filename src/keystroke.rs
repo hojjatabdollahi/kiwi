@@ -289,18 +289,19 @@ fn key_content<'a, M: 'a>(key: &str, text_color: Color, key_size: f32) -> Elemen
 }
 
 /// Creates the pressed-down emblem - a small icon at bottom of a pressed key
-fn pressed_emblem<'a, M: 'a>(text_color: Color, emblem_size: f32) -> Element<'a, M> {
+fn pressed_emblem<'a, M: 'a>(color: Color, emblem_size: f32) -> Element<'a, M> {
     let handle = svg::Handle::from_memory(ICON_PRESSED_DOWN);
     Svg::new(handle)
         .width(Length::Fixed(emblem_size))
         .height(Length::Fixed(emblem_size))
         .class(cosmic::theme::Svg::custom(move |_| svg::Style {
-            color: Some(text_color),
+            color: Some(color),
         }))
         .into()
 }
 
-/// Wraps key content with the pressed emblem at the bottom if pressed
+/// Wraps key content with the pressed emblem overlaid in the corner if pressed
+/// Uses a stack so the emblem doesn't affect the layout
 fn key_content_with_emblem<'a, M: 'a>(
     key: &str,
     text_color: Color,
@@ -310,13 +311,24 @@ fn key_content_with_emblem<'a, M: 'a>(
     let content = key_content(key, text_color, key_size);
 
     if pressed {
-        let emblem_size = key_size * 0.3;
-        widget::column()
-            .push(content)
-            .push(pressed_emblem(text_color, emblem_size))
-            .align_x(iced::Alignment::Center)
-            .spacing(0)
-            .into()
+        let emblem_size = key_size * 0.22; // Smaller emblem
+        // Use stack to overlay emblem in bottom-right corner without changing layout
+        cosmic::iced::widget::stack![
+            // Main content centered
+            widget::container(content)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Center)
+                .align_y(iced::alignment::Vertical::Center),
+            // Emblem at bottom-right corner (overlaid)
+            widget::container(pressed_emblem::<M>(text_color, emblem_size))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Right)
+                .align_y(iced::alignment::Vertical::Bottom)
+                .padding([0, 2, 2, 0]) // small padding from corner
+        ]
+        .into()
     } else {
         content
     }

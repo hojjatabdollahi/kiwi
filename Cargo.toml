@@ -15,7 +15,7 @@ env_logger = "0.11"
 log = "0.4"
 
 # System tray
-ksni = "0.2"
+ksni = { version = "0.3.3", features = ["blocking"] }
 
 # Channels
 crossbeam-channel = "0.5"
@@ -39,11 +39,4 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic"
 default-features = false
-features = [
-    "dbus-config",
-    "multi-window",
-    "tokio",
-    "wayland",
-    "winit",
-    "wgpu",
-]
+features = ["dbus-config", "multi-window", "tokio", "wayland", "winit", "wgpu"]

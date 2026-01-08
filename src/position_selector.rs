@@ -120,8 +120,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
             .position()
             .and_then(|pos| self.get_region(pos.x, pos.y, bounds));
 
-        let corner_size = 12.0;
-        let thickness = 4.0;
+        let corner_size = 18.0;
+        let thickness = 6.0;
 
         // Helper to get color for a position
         let get_color = |pos: OverlayPosition| -> cosmic::iced::Color {
