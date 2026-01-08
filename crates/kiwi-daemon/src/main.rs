@@ -1,5 +1,7 @@
 //! Kiwi daemon - layer-shell overlay for keystroke visualization
 
+mod ui;
+
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -12,12 +14,12 @@ use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
 use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
-use cosmic::widget::text;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use wayland_client::protocol::wl_output::WlOutput;
 
 use kiwi_common::{DBUS_NAME, DBUS_PATH};
 use kiwi_input::{InputCapture, InputEvent, KeyState};
+use ui::{KeyModifiers, Keystroke};
 
 fn main() -> cosmic::iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -33,9 +35,15 @@ fn main() -> cosmic::iced::Result {
 struct SharedState {
     enabled: bool,
     quit_requested: bool,
-    /// Recent key display text
-    display_text: String,
+    /// Current modifier state
+    modifiers: KeyModifiers,
+    /// Currently pressed non-modifier key (if any)
+    current_key: Option<String>,
+    /// History of completed keystrokes (released) - shown as not pressed
+    history: Vec<Keystroke>,
 }
+
+const MAX_HISTORY: usize = 5;
 
 /// D-Bus service implementation
 struct KiwiDbus {
@@ -95,10 +103,24 @@ fn create_layer_surface_for_output(
         output: IcedOutput::Output(output.clone()),
         namespace: "kiwi".to_string(),
         size: Some((Some(400), Some(80))),
+        margin: cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin {
+            top: 20,
+            right: 20,
+            bottom: 0,
+            left: 0,
+        },
         exclusive_zone: -1,
         size_limits: Limits::NONE.min_width(1.0).min_height(1.0),
         ..Default::default()
     })
+}
+
+/// Push a keystroke to history, limiting size
+fn push_history(history: &mut Vec<Keystroke>, keystroke: Keystroke) {
+    if history.len() >= MAX_HISTORY {
+        history.remove(0);
+    }
+    history.push(keystroke);
 }
 
 /// Convert key code to display string
@@ -174,7 +196,9 @@ impl cosmic::Application for Kiwi {
         let state = Arc::new(Mutex::new(SharedState {
             enabled: true,
             quit_requested: false,
-            display_text: String::new(),
+            modifiers: KeyModifiers::default(),
+            current_key: None,
+            history: Vec::new(),
         }));
 
         // Start D-Bus service in background
@@ -212,21 +236,78 @@ impl cosmic::Application for Kiwi {
                         }
                         
                         for event in capture.events() {
-                            if let InputEvent::Key { key, state: KeyState::Pressed } = event {
-                                if let Some(key_str) = key_to_string(key) {
+                            match event {
+                                InputEvent::Key { key, state: key_state } => {
                                     if let Ok(mut s) = input_state.lock() {
-                                        if s.enabled {
-                                            // Append key, limit display length
-                                            if s.display_text.len() > 30 {
-                                                s.display_text.clear();
+                                        if !s.enabled {
+                                            continue;
+                                        }
+
+                                        let is_modifier = matches!(key, 29 | 97 | 56 | 100 | 42 | 54 | 125 | 126);
+                                        let key_str = key_to_string(key);
+
+                                        match key_state {
+                                            KeyState::Pressed => {
+                                                if is_modifier {
+                                                    // Update modifier state
+                                                    match key {
+                                                        29 | 97 => s.modifiers.ctrl = true,
+                                                        56 | 100 => s.modifiers.alt = true,
+                                                        42 | 54 => s.modifiers.shift = true,
+                                                        125 | 126 => s.modifiers.super_key = true,
+                                                        _ => {}
+                                                    }
+                                                    // If no key is currently pressed, modifiers are shown as "pressed"
+                                                    // (handled in view by building current keystroke from state)
+                                                } else if let Some(key_str) = key_str {
+                                                    // Non-modifier key pressed
+                                                    // If there was a previous key being held, release it to history
+                                                    if let Some(prev_key) = s.current_key.take() {
+                                                        let completed = if s.modifiers.any() {
+                                                            Keystroke::combination(&s.modifiers, prev_key, false)
+                                                        } else {
+                                                            Keystroke::single(prev_key, false)
+                                                        };
+                                                        push_history(&mut s.history, completed);
+                                                    }
+                                                    // Set the new key as currently pressed
+                                                    s.current_key = Some(key_str);
+                                                }
                                             }
-                                            if !s.display_text.is_empty() {
-                                                s.display_text.push(' ');
+                                            KeyState::Released => {
+                                                if is_modifier {
+                                                    // Before releasing modifier, if we have a current key, 
+                                                    // the combo with this modifier is complete
+                                                    // But we continue holding the key with remaining modifiers
+                                                    
+                                                    // Update modifier state
+                                                    match key {
+                                                        29 | 97 => s.modifiers.ctrl = false,
+                                                        56 | 100 => s.modifiers.alt = false,
+                                                        42 | 54 => s.modifiers.shift = false,
+                                                        125 | 126 => s.modifiers.super_key = false,
+                                                        _ => {}
+                                                    }
+                                                } else if key_str.is_some() {
+                                                    // Non-modifier key released
+                                                    if let Some(current) = s.current_key.take() {
+                                                        // Add the completed keystroke to history
+                                                        let completed = if s.modifiers.any() {
+                                                            Keystroke::combination(&s.modifiers, current, false)
+                                                        } else {
+                                                            Keystroke::single(current, false)
+                                                        };
+                                                        push_history(&mut s.history, completed);
+                                                        
+                                                        // If modifiers are still held, they become the new "pressed" state
+                                                        // (no current_key, but modifiers shown as pressed in view)
+                                                    }
+                                                }
                                             }
-                                            s.display_text.push_str(&key_str);
                                         }
                                     }
                                 }
+                                _ => {}
                             }
                         }
                         
@@ -255,36 +336,44 @@ impl cosmic::Application for Kiwi {
 
     fn view_window(&self, id: window::Id) -> cosmic::Element<'_, Self::Message> {
         if self.outputs.iter().any(|o| o.surface_id == id) {
-            let display_text = self.state
+            let keystrokes = self.state
                 .lock()
                 .map(|s| {
-                    if s.enabled && !s.display_text.is_empty() {
-                        s.display_text.clone()
-                    } else {
-                        "Kiwi".to_string()
+                    if !s.enabled {
+                        return Vec::new();
                     }
+
+                    let mut display: Vec<Keystroke> = s.history.clone();
+
+                    // Build current "pressed" keystroke from state
+                    if let Some(ref key) = s.current_key {
+                        // Key + modifiers pressed
+                        let current = if s.modifiers.any() {
+                            Keystroke::combination(&s.modifiers, key.clone(), true)
+                        } else {
+                            Keystroke::single(key.clone(), true)
+                        };
+                        display.push(current);
+                    } else if s.modifiers.any() {
+                        // Only modifiers pressed (no key)
+                        if let Some(mods_keystroke) = Keystroke::from_modifiers(&s.modifiers, true) {
+                            display.push(mods_keystroke);
+                        }
+                    }
+
+                    display
                 })
-                .unwrap_or_else(|_| "Kiwi".to_string());
+                .unwrap_or_default();
             
-            cosmic::widget::container(
-                text::Text::new(display_text)
-                    .size(28)
-                    .class(cosmic::theme::Text::Color(cosmic::iced::Color::WHITE)),
-            )
-            .padding(15)
-            .class(cosmic::theme::Container::custom(|_| {
-                cosmic::iced_widget::container::Style {
-                    background: Some(cosmic::iced::Background::Color(
-                        cosmic::iced::Color::from_rgba(0.0, 0.0, 0.0, 0.7)
-                    )),
-                    border: cosmic::iced::Border {
-                        radius: 10.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }
-            }))
-            .into()
+            if keystrokes.is_empty() {
+                // Empty transparent container when no keystrokes
+                cosmic::widget::container(cosmic::widget::text(""))
+                    .into()
+            } else {
+                // Show keystrokes row with clipping (spacer inside pushes to right)
+                // Width::Fill needed for spacer to expand, but row items keep natural size
+                ui::keystrokes_row(&keystrokes)
+            }
         } else {
             cosmic::widget::text("").into()
         }
