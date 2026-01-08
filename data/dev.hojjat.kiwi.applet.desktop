@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Kiwi Keystroke Visualizer
+Comment=Toggle keystroke visualization overlay
+Icon=input-keyboard-symbolic
+Type=Application
+Exec=kiwi-applet
+Terminal=false
+Categories=Utility;
+X-COSMIC-Applet=true
+X-COSMIC-Name=Kiwi
+X-COSMIC-Description=Show keystrokes on screen
+X-COSMIC-PanelApplet=true
+NoDisplay=true
