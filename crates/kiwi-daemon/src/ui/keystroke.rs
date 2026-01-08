@@ -138,13 +138,13 @@ const BORDER_RADIUS: f32 = 6.0;
 const KEY_SIZE: f32 = 48.0;
 const FONT_SIZE: f32 = 20.0;
 const PLUS_FONT_SIZE: f32 = 14.0;
-const INNER_PADDING: u16 = 10;
+const PLUS_WIDTH: f32 = 16.0;  // Width for the "+" separator
 const KEY_GAP: f32 = 8.0;
 
 /// Renders a keystroke widget with opacity based on age
 /// 
 /// - Single key: square with border
-/// - Combination: single rectangle with keys + "+" as text (no inner borders)
+/// - Combination: outer container with border, inner key boxes (no border) + "+" separators
 pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
     let opacity = keystroke.opacity();
     
@@ -159,34 +159,51 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
     let plus_color = Color::from_rgba(1.0, 1.0, 1.0, 0.5 * opacity);
 
     if keystroke.is_combination() {
-        // Combination: single rectangle with "Key + Key + Key" text
+        // Combination: outer border, inner key boxes without borders
         let mut row_children: Vec<Element<'a, M>> = Vec::new();
 
         for (i, key) in keystroke.keys.iter().enumerate() {
             if i > 0 {
-                // Add "+" separator
+                // Add "+" separator (fixed width, centered)
                 row_children.push(
-                    text::Text::new("+")
-                        .size(PLUS_FONT_SIZE)
-                        .class(cosmic::theme::Text::Color(plus_color))
-                        .into(),
+                    widget::container(
+                        text::Text::new("+")
+                            .size(PLUS_FONT_SIZE)
+                            .class(cosmic::theme::Text::Color(plus_color))
+                            .align_x(iced::alignment::Horizontal::Center)
+                            .align_y(iced::alignment::Vertical::Center),
+                    )
+                    .width(Length::Fixed(PLUS_WIDTH))
+                    .height(Length::Fixed(KEY_SIZE))
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .align_y(iced::alignment::Vertical::Center)
+                    .into(),
                 );
             }
+            // Key box: KEY_SIZE square, no border, centered text
             row_children.push(
-                text::Text::new(key.clone())
-                    .size(FONT_SIZE)
-                    .class(cosmic::theme::Text::Color(text_color))
-                    .into(),
+                widget::container(
+                    text::Text::new(key.clone())
+                        .size(FONT_SIZE)
+                        .class(cosmic::theme::Text::Color(text_color))
+                        .align_x(iced::alignment::Horizontal::Center)
+                        .align_y(iced::alignment::Vertical::Center),
+                )
+                .width(Length::Fixed(KEY_SIZE))
+                .height(Length::Fixed(KEY_SIZE))
+                .align_x(iced::alignment::Horizontal::Center)
+                .align_y(iced::alignment::Vertical::Center)
+                .into(),
             );
         }
 
+        // Outer container with border, no padding, no spacing (children handle their own size)
         widget::container(
             widget::row::with_children(row_children)
-                .spacing(6)
+                .spacing(0)
                 .align_y(iced::Alignment::Center),
         )
         .height(Length::Fixed(KEY_SIZE))
-        .padding([0, INNER_PADDING])
         .align_x(iced::alignment::Horizontal::Center)
         .align_y(iced::alignment::Vertical::Center)
         .class(cosmic::theme::Container::custom(move |_| container::Style {
@@ -200,7 +217,7 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
         }))
         .into()
     } else {
-        // Single key: square
+        // Single key: square with border
         widget::container(
             text::Text::new(keystroke.keys[0].clone())
                 .size(FONT_SIZE)
@@ -232,13 +249,9 @@ impl Keystroke {
     /// Estimate the width of this keystroke widget
     fn estimated_width(&self) -> f32 {
         if self.is_combination() {
-            // Combination: text for each key + "+" separators + padding
-            // Rough estimate: ~20px per character, 6px spacing between parts
-            let text_width: f32 = self.keys.iter()
-                .map(|k| k.len() as f32 * 12.0)  // ~12px per char
-                .sum();
-            let plus_width = (self.keys.len() - 1) as f32 * (PLUS_FONT_SIZE + 6.0);  // "+" with spacing
-            text_width + plus_width + (INNER_PADDING as f32 * 2.0)
+            // Combination: n keys (each KEY_SIZE) + (n-1) plus separators (each PLUS_WIDTH)
+            let n = self.keys.len() as f32;
+            n * KEY_SIZE + (n - 1.0) * PLUS_WIDTH
         } else {
             // Single key: fixed square size
             KEY_SIZE

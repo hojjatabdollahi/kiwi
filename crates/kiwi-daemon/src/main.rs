@@ -35,10 +35,10 @@ fn main() -> cosmic::iced::Result {
 struct SharedState {
     enabled: bool,
     quit_requested: bool,
-    /// Current modifier state
+    /// Current modifier state (live)
     modifiers: KeyModifiers,
-    /// Currently pressed non-modifier key (if any)
-    current_key: Option<String>,
+    /// Currently pressed non-modifier key and the modifiers that were active when it was pressed
+    current_key: Option<(String, KeyModifiers)>,
     /// History of completed keystrokes (released) - shown as not pressed
     history: Vec<Keystroke>,
     /// Track if a non-modifier key was pressed while modifiers were held
@@ -272,16 +272,16 @@ impl cosmic::Application for Kiwi {
                                                         s.key_pressed_with_modifiers = true;
                                                     }
                                                     // If there was a previous key being held, release it to history
-                                                    if let Some(prev_key) = s.current_key.take() {
-                                                        let completed = if s.modifiers.any() {
-                                                            Keystroke::combination(&s.modifiers, prev_key, false)
+                                                    if let Some((prev_key, prev_mods)) = s.current_key.take() {
+                                                        let completed = if prev_mods.any() {
+                                                            Keystroke::combination(&prev_mods, prev_key, false)
                                                         } else {
                                                             Keystroke::single(prev_key, false)
                                                         };
                                                         push_history(&mut s.history, completed);
                                                     }
-                                                    // Set the new key as currently pressed
-                                                    s.current_key = Some(key_str);
+                                                    // Set the new key as currently pressed, with current modifiers
+                                                    s.current_key = Some((key_str, s.modifiers.clone()));
                                                 }
                                             }
                                             KeyState::Released => {
@@ -313,10 +313,11 @@ impl cosmic::Application for Kiwi {
                                                     }
                                                 } else if key_str.is_some() {
                                                     // Non-modifier key released
-                                                    if let Some(current) = s.current_key.take() {
-                                                        // Add the completed keystroke to history
-                                                        let completed = if s.modifiers.any() {
-                                                            Keystroke::combination(&s.modifiers, current, false)
+                                                    if let Some((current, key_mods)) = s.current_key.take() {
+                                                        // Add the completed keystroke to history using the
+                                                        // modifiers that were active when the key was PRESSED
+                                                        let completed = if key_mods.any() {
+                                                            Keystroke::combination(&key_mods, current, false)
                                                         } else {
                                                             Keystroke::single(current, false)
                                                         };
@@ -369,10 +370,10 @@ impl cosmic::Application for Kiwi {
                     let mut display: Vec<Keystroke> = s.history.clone();
 
                     // Build current "pressed" keystroke from state
-                    if let Some(ref key) = s.current_key {
-                        // Key + modifiers pressed
-                        let current = if s.modifiers.any() {
-                            Keystroke::combination(&s.modifiers, key.clone(), true)
+                    if let Some((ref key, ref key_mods)) = s.current_key {
+                        // Key + modifiers pressed (use modifiers from when key was pressed)
+                        let current = if key_mods.any() {
+                            Keystroke::combination(key_mods, key.clone(), true)
                         } else {
                             Keystroke::single(key.clone(), true)
                         };
