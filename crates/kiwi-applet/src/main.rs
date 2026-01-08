@@ -70,32 +70,18 @@ impl cosmic::Application for KiwiApplet {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        // Show different icon based on enabled state
+        // Different icon based on enabled state
         let icon_name = if self.config.enabled {
-            "input-keyboard-symbolic"  // TODO: Use custom icon with indicator
+            "keyboard-brightness-symbolic" // "active" looking icon
         } else {
-            "input-keyboard-symbolic"
+            "input-keyboard-symbolic" // regular keyboard
         };
 
-        let button = self.core
+        self.core
             .applet
             .icon_button(icon_name)
-            .on_press(Message::TogglePopup);
-
-        // When enabled, add a colored indicator by wrapping in a container
-        if self.config.enabled {
-            widget::container(button)
-                .class(cosmic::theme::Container::custom(|_theme| {
-                    cosmic::iced_widget::container::Style {
-                        text_color: Some(cosmic::iced::Color::from_rgb(0.9, 0.2, 0.2)),
-                        icon_color: Some(cosmic::iced::Color::from_rgb(0.9, 0.2, 0.2)),
-                        ..cosmic::iced_widget::container::Style::default()
-                    }
-                }))
-                .into()
-        } else {
-            button.into()
-        }
+            .on_press(Message::TogglePopup)
+            .into()
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
