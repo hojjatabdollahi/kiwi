@@ -1,0 +1,21 @@
+[package]
+name = "kiwi"
+version = "0.1.0"
+edition = "2021"
+description = "Keystroke visualizer overlay for COSMIC desktop"
+
+[features]
+default = ["wgpu"]
+wgpu = ["cosmic/wgpu"]
+
+[dependencies]
+env_logger = "0.11"
+log = "0.4"
+
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", branch = "main" }
+
+[dependencies.cosmic]
+package = "libcosmic"
+git = "https://github.com/pop-os/libcosmic"
+default-features = false
+features = ["multi-window", "wayland", "wgpu", "winit"]
