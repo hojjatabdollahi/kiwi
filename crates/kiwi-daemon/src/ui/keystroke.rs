@@ -21,6 +21,15 @@ const ICON_SPACE: &[u8] = include_bytes!("../../../../data/icons/kiwi-space-symb
 const ICON_CAPS: &[u8] = include_bytes!("../../../../data/icons/kiwi-capslock-symbolic.svg");
 const ICON_SUPER: &[u8] = include_bytes!("../../../../data/icons/kiwi-super-symbolic.svg");
 const ICON_ESCAPE: &[u8] = include_bytes!("../../../../data/icons/kiwi-escape-symbolic.svg");
+const ICON_LEFT_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-left-click-symbolic.svg");
+const ICON_RIGHT_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-right-click-symbolic.svg");
+const ICON_SCROLL_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-click-symbolic.svg");
+const ICON_SCROLL_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-up-symbolic.svg");
+const ICON_SCROLL_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-down-symbolic.svg");
+const ICON_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-tap-symbolic.svg");
+const ICON_TWO_FINGER_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-finger-tap-symbolic.svg");
+const ICON_TWO_FINGER_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-finger-up-symbolic.svg");
+const ICON_TWO_FINGER_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-finger-down-symbolic.svg");
 
 
 /// How long keystrokes stay visible before fully fading
@@ -169,6 +178,15 @@ fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
         "Caps" => Some((ICON_CAPS, true)),
         "Super" => Some((ICON_SUPER, false)), // Keep original colors
         "Esc" => Some((ICON_ESCAPE, true)),
+        "LClick" => Some((ICON_LEFT_CLICK, true)),
+        "RClick" => Some((ICON_RIGHT_CLICK, true)),
+        "MClick" => Some((ICON_SCROLL_CLICK, true)),
+        "ScrollUp" => Some((ICON_SCROLL_UP, true)),
+        "ScrollDown" => Some((ICON_SCROLL_DOWN, true)),
+        "Tap" => Some((ICON_TAP, true)),
+        "2Tap" => Some((ICON_TWO_FINGER_TAP, true)),
+        "2Up" => Some((ICON_TWO_FINGER_UP, true)),
+        "2Down" => Some((ICON_TWO_FINGER_DOWN, true)),
         _ => None,
     }
 }

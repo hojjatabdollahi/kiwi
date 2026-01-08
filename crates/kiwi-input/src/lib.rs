@@ -66,9 +66,16 @@ pub enum InputEvent {
     MouseButton {
         button: u32,
         state: ButtonState,
+        /// True if from a touchpad (tap), false if from a mouse
+        is_touchpad: bool,
     },
-    /// Mouse scroll
+    /// Mouse wheel scroll
     MouseScroll {
+        axis: Axis,
+        value: f64,
+    },
+    /// Touchpad two-finger scroll
+    TouchpadScroll {
         axis: Axis,
         value: f64,
     },
@@ -107,9 +114,10 @@ impl InputCapture {
     /// Iterate over available events
     pub fn events(&mut self) -> impl Iterator<Item = InputEvent> + '_ {
         self.libinput.by_ref().filter_map(|event| {
-            use input::event::Event;
+            use input::event::{Event, EventTrait};
             use input::event::keyboard::KeyboardEventTrait;
             use input::event::pointer::PointerScrollEvent;
+            use input::DeviceCapability;
 
             match event {
                 Event::Keyboard(kb_event) => {
@@ -126,12 +134,19 @@ impl InputCapture {
                 Event::Pointer(ptr_event) => {
                     use input::event::pointer::PointerEvent;
                     match ptr_event {
-                        PointerEvent::Button(btn) => Some(InputEvent::MouseButton {
-                            button: btn.button(),
-                            state: btn.button_state(),
-                        }),
+                        PointerEvent::Button(ref btn) => {
+                            // Check if device is a touchpad (has Gesture capability)
+                            // Touchpads have Gesture, mice don't
+                            let device = btn.device();
+                            let is_touchpad = device.has_capability(DeviceCapability::Gesture);
+                            Some(InputEvent::MouseButton {
+                                button: btn.button(),
+                                state: btn.button_state(),
+                                is_touchpad,
+                            })
+                        }
                         PointerEvent::ScrollWheel(scroll) => {
-                            // Report vertical scroll first, then horizontal if present
+                            // Mouse wheel scroll
                             if scroll.has_axis(Axis::Vertical) {
                                 Some(InputEvent::MouseScroll {
                                     axis: Axis::Vertical,
@@ -141,6 +156,22 @@ impl InputCapture {
                                 Some(InputEvent::MouseScroll {
                                     axis: Axis::Horizontal,
                                     value: scroll.scroll_value_v120(Axis::Horizontal),
+                                })
+                            } else {
+                                None
+                            }
+                        }
+                        PointerEvent::ScrollFinger(scroll) => {
+                            // Touchpad two-finger scroll
+                            if scroll.has_axis(Axis::Vertical) {
+                                Some(InputEvent::TouchpadScroll {
+                                    axis: Axis::Vertical,
+                                    value: scroll.scroll_value(Axis::Vertical),
+                                })
+                            } else if scroll.has_axis(Axis::Horizontal) {
+                                Some(InputEvent::TouchpadScroll {
+                                    axis: Axis::Horizontal,
+                                    value: scroll.scroll_value(Axis::Horizontal),
                                 })
                             } else {
                                 None

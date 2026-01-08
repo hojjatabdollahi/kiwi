@@ -331,7 +331,78 @@ impl cosmic::Application for Kiwi {
                                         }
                                     }
                                 }
-                                _ => {}
+                                InputEvent::MouseButton { button, state: btn_state, is_touchpad } => {
+                                    if let Ok(mut s) = input_state.lock() {
+                                        if !s.enabled {
+                                            continue;
+                                        }
+                                        
+                                        // Only show on release (like keys)
+                                        if btn_state == kiwi_input::ButtonState::Released {
+                                            let btn_str = match (button, is_touchpad) {
+                                                (272, true) => "Tap",      // Touchpad tap
+                                                (273, true) => "2Tap",     // Touchpad two-finger tap
+                                                (272, false) => "LClick",  // Mouse left click
+                                                (273, false) => "RClick",  // Mouse right click
+                                                (274, _) => "MClick",      // Middle click
+                                                _ => continue,
+                                            };
+                                            
+                                            let keystroke = if s.modifiers.any() {
+                                                Keystroke::combination(&s.modifiers, btn_str.to_string(), false)
+                                            } else {
+                                                Keystroke::single(btn_str.to_string(), false)
+                                            };
+                                            push_history(&mut s.history, keystroke);
+                                        }
+                                    }
+                                }
+                                InputEvent::MouseScroll { axis, value } => {
+                                    if let Ok(mut s) = input_state.lock() {
+                                        if !s.enabled {
+                                            continue;
+                                        }
+                                        
+                                        // Only handle vertical scroll, ignore tiny movements
+                                        if axis == kiwi_input::Axis::Vertical && value.abs() > 10.0 {
+                                            let scroll_str = if value > 0.0 {
+                                                "ScrollDown"
+                                            } else {
+                                                "ScrollUp"
+                                            };
+                                            
+                                            let keystroke = if s.modifiers.any() {
+                                                Keystroke::combination(&s.modifiers, scroll_str.to_string(), false)
+                                            } else {
+                                                Keystroke::single(scroll_str.to_string(), false)
+                                            };
+                                            push_history(&mut s.history, keystroke);
+                                        }
+                                    }
+                                }
+                                InputEvent::TouchpadScroll { axis, value } => {
+                                    if let Ok(mut s) = input_state.lock() {
+                                        if !s.enabled {
+                                            continue;
+                                        }
+                                        
+                                        // Only handle vertical scroll, ignore tiny movements
+                                        if axis == kiwi_input::Axis::Vertical && value.abs() > 5.0 {
+                                            let scroll_str = if value > 0.0 {
+                                                "2Down"
+                                            } else {
+                                                "2Up"
+                                            };
+                                            
+                                            let keystroke = if s.modifiers.any() {
+                                                Keystroke::combination(&s.modifiers, scroll_str.to_string(), false)
+                                            } else {
+                                                Keystroke::single(scroll_str.to_string(), false)
+                                            };
+                                            push_history(&mut s.history, keystroke);
+                                        }
+                                    }
+                                }
                             }
                         }
                         
