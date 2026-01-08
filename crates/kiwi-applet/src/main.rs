@@ -8,7 +8,7 @@ use cosmic::iced_widget::svg::{self, Svg};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::prelude::*;
 use cosmic::widget;
-use kiwi_common::{keystroke_preview, Config, OverlayPosition, PaletteType, APP_ID};
+use kiwi_common::{keystroke_widget, Config, Keystroke, OverlayPosition, PaletteType, APP_ID};
 use position_selector::PositionSelector;
 
 const SERVICE_NAME: &str = "kiwi-daemon.service";
@@ -16,6 +16,15 @@ const SERVICE_NAME: &str = "kiwi-daemon.service";
 // Embedded kiwi icons for applet
 const ICON_KIWI_OFF: &[u8] = include_bytes!("../../../data/icons/kiwi-off.svg");
 const ICON_KIWI_ON: &[u8] = include_bytes!("../../../data/icons/kiwi-on.svg");
+
+// Checkerboard pattern SVG for transparency preview (8x8 tiles, light/dark gray)
+const CHECKERBOARD_SVG: &[u8] =
+    b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\">\
+  <rect width=\"8\" height=\"8\" fill=\"rgb(204,204,204)\"/>\
+  <rect x=\"8\" width=\"8\" height=\"8\" fill=\"rgb(153,153,153)\"/>\
+  <rect y=\"8\" width=\"8\" height=\"8\" fill=\"rgb(153,153,153)\"/>\
+  <rect x=\"8\" y=\"8\" width=\"8\" height=\"8\" fill=\"rgb(204,204,204)\"/>\
+</svg>";
 
 /// Static palette names for dropdown (must match PaletteType::ALL order)
 const PALETTE_NAMES: &[&str] = &["Dark", "Light", "Frosted", "Kiwi"];
@@ -191,25 +200,46 @@ impl cosmic::Application for KiwiApplet {
             PositionSelector::new(160.0, self.config.position, Message::SetPosition);
 
         // Sample keystroke preview (scales with slider, cap at 120 for applet)
-        let preview_size = self.config.key_size.min(120.0);
-        let preview = keystroke_preview::<Message>(preview_size, self.config.palette);
+        let preview_size = self.config.key_size.min(250.0);
+        let sample_keystroke = Keystroke::single("Alt", false);
+        let preview = keystroke_widget::<Message>(
+            &sample_keystroke,
+            preview_size,
+            1.0, // fade_duration (unused when fade disabled)
+            self.config.palette,
+            false, // fade_enabled = false for static preview
+        );
+
+        // Checkerboard background for transparency preview
+        let checkerboard = Svg::new(svg::Handle::from_memory(CHECKERBOARD_SVG))
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+        // Stack preview on top of checkerboard
+        let preview_with_bg = widget::container(cosmic::iced::widget::stack![
+            widget::container(checkerboard)
+                .align_x(cosmic::iced::alignment::Horizontal::Center)
+                .align_y(cosmic::iced::alignment::Vertical::Center),
+            widget::container(preview)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(cosmic::iced::alignment::Horizontal::Center)
+                .align_y(cosmic::iced::alignment::Vertical::Center),
+        ])
+        .width(Length::Fill)
+        .height(Length::Fill);
 
         // Fixed-size container for preview (tall enough for max preview size)
-        let preview_container = widget::container(preview)
+        let preview_container = widget::container(preview_with_bg)
             .width(Length::Fill)
-            .height(Length::Fixed(135.0))
+            .height(Length::Fixed(260.0))
             .align_x(cosmic::iced::alignment::Horizontal::Center)
             .align_y(cosmic::iced::alignment::Vertical::Center);
 
-        // Position selector with tooltip (centered, no label, with padding)
-        let position_with_tooltip = widget::tooltip(
-            widget::container(position_selector)
-                .width(Length::Fill)
-                .padding([10, 0]) // vertical padding
-                .align_x(cosmic::iced::alignment::Horizontal::Center),
-            "Position",
-            widget::tooltip::Position::Bottom,
-        );
+        let position_container = widget::container(position_selector)
+            .width(Length::Fill)
+            .padding([10, 0]) // vertical padding
+            .align_x(cosmic::iced::alignment::Horizontal::Center);
 
         let content = widget::column()
             .padding(10)
@@ -236,12 +266,12 @@ impl cosmic::Application for KiwiApplet {
                         widget::slider(32.0..=256.0, self.config.key_size, Message::SetKeySize)
                             .width(Length::Fill),
                         "Size",
-                        widget::tooltip::Position::Top,
+                        widget::tooltip::Position::Bottom,
                     ))
                     .push(widget::tooltip(
                         widget::dropdown(PALETTE_NAMES, current_index, Message::SetPaletteIndex),
                         "Theme",
-                        widget::tooltip::Position::Top,
+                        widget::tooltip::Position::Bottom,
                     )),
             )
             // Separator
@@ -267,7 +297,7 @@ impl cosmic::Application for KiwiApplet {
             // Separator
             .push(widget::divider::horizontal::default())
             // Position selector (centered, no label, with tooltip)
-            .push(position_with_tooltip);
+            .push(position_container);
 
         self.core.applet.popup_container(content).into()
     }

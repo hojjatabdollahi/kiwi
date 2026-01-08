@@ -10,8 +10,7 @@ pub use cosmic::iced::Color;
 /// Keystroke visualization widgets
 pub mod keystroke;
 pub use keystroke::{
-    keystroke_preview, keystroke_widget, keystrokes_row, KeyModifiers, Keystroke,
-    REPEAT_THRESHOLD_MS,
+    keystroke_widget, keystrokes_row, KeyModifiers, Keystroke, REPEAT_THRESHOLD_MS,
 };
 
 /// The APP_ID used for cosmic-config

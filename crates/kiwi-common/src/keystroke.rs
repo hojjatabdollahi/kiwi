@@ -326,13 +326,19 @@ fn key_content_with_emblem<'a, M: 'a>(
 ///
 /// - Single key: square with border
 /// - Combination: outer container with border, inner key boxes (no border) + "+" separators
+/// - If `fade_enabled` is false, the widget will always be fully opaque
 pub fn keystroke_widget<'a, M: 'a>(
     keystroke: &Keystroke,
     key_size: f32,
     fade_duration: f32,
     palette_type: PaletteType,
+    fade_enabled: bool,
 ) -> Element<'a, M> {
-    let opacity = keystroke.opacity(fade_duration);
+    let opacity = if fade_enabled {
+        keystroke.opacity(fade_duration)
+    } else {
+        1.0
+    };
     let plus_font_size = plus_font_size_for_key(key_size);
     let palette = Palette::from_type(palette_type).with_opacity(opacity);
 
@@ -501,50 +507,6 @@ pub fn keystroke_widget<'a, M: 'a>(
     }
 }
 
-/// Creates a simple preview keystroke widget for the applet settings.
-/// Shows a single "A" key with no fade animation.
-pub fn keystroke_preview<'a, M: 'a>(key_size: f32, palette_type: PaletteType) -> Element<'a, M> {
-    let palette = Palette::from_type(palette_type);
-
-    let background = if let Some(gradient_end) = palette.bg_gradient_end {
-        let grad = gradient::Linear::new(std::f32::consts::PI / 4.0)
-            .add_stop(0.0, palette.bg_released)
-            .add_stop(1.0, gradient_end);
-        Background::Gradient(gradient::Gradient::Linear(grad))
-    } else {
-        Background::Color(palette.bg_released)
-    };
-
-    let border_color = palette.border;
-    let text_color = palette.text;
-    let font_size = key_size * 0.55;
-
-    // Single key showing "A"
-    widget::container(
-        text::Text::new("A")
-            .size(font_size)
-            .class(cosmic::theme::Text::Color(text_color))
-            .align_x(iced::alignment::Horizontal::Center)
-            .align_y(iced::alignment::Vertical::Center),
-    )
-    .width(Length::Fixed(key_size))
-    .height(Length::Fixed(key_size))
-    .align_x(iced::alignment::Horizontal::Center)
-    .align_y(iced::alignment::Vertical::Center)
-    .class(cosmic::theme::Container::custom(move |_| {
-        container::Style {
-            background: Some(background),
-            border: Border {
-                color: border_color,
-                width: BORDER_WIDTH,
-                radius: BORDER_RADIUS.into(),
-            },
-            ..Default::default()
-        }
-    }))
-    .into()
-}
-
 // Margin/padding inside the window
 const WINDOW_MARGIN: f32 = 40.0;
 
@@ -603,7 +565,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
 
     let children: Vec<Element<'a, M>> = fitting_keystrokes
         .into_iter()
-        .map(|k| keystroke_widget(k, key_size, fade_duration, palette_type))
+        .map(|k| keystroke_widget(k, key_size, fade_duration, palette_type, true))
         .collect();
 
     // Determine horizontal alignment based on position
