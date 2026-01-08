@@ -2864,6 +2864,7 @@ name = "kiwi-common"
 version = "0.1.0"
 dependencies = [
  "cosmic-config",
+ "libcosmic",
  "log",
  "serde",
  "zbus 5.12.0",

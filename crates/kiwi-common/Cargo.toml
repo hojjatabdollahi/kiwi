@@ -10,3 +10,6 @@ serde.workspace = true
 log.workspace = true
 cosmic-config.workspace = true
 zbus.workspace = true
+
+[dependencies.libcosmic]
+workspace = true

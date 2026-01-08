@@ -4,6 +4,16 @@ use cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic_config::CosmicConfigEntry;
 use serde::{Deserialize, Serialize};
 
+/// Re-export iced Color type for palette colors
+pub use cosmic::iced::Color;
+
+/// Keystroke visualization widgets
+pub mod keystroke;
+pub use keystroke::{
+    keystroke_preview, keystroke_widget, keystrokes_row, KeyModifiers, Keystroke,
+    REPEAT_THRESHOLD_MS,
+};
+
 /// The APP_ID used for cosmic-config
 pub const APP_ID: &str = "dev.hojjat.kiwi";
 
@@ -20,6 +30,37 @@ pub enum PaletteType {
     Light,
     Frosted,
     Kiwi,
+}
+
+/// Position of the overlay on screen
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OverlayPosition {
+    TopLeft,
+    TopRight,
+    #[default]
+    BottomLeft,
+    BottomRight,
+    BottomCenter,
+}
+
+impl OverlayPosition {
+    pub const ALL: &'static [OverlayPosition] = &[
+        OverlayPosition::TopLeft,
+        OverlayPosition::TopRight,
+        OverlayPosition::BottomLeft,
+        OverlayPosition::BottomRight,
+        OverlayPosition::BottomCenter,
+    ];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            OverlayPosition::TopLeft => "Top Left",
+            OverlayPosition::TopRight => "Top Right",
+            OverlayPosition::BottomLeft => "Bottom Left",
+            OverlayPosition::BottomRight => "Bottom Right",
+            OverlayPosition::BottomCenter => "Bottom Center",
+        }
+    }
 }
 
 impl PaletteType {
@@ -40,9 +81,124 @@ impl PaletteType {
     }
 }
 
+/// Color palette for keystroke visualization
+#[derive(Debug, Clone, Copy)]
+pub struct Palette {
+    /// Text color (base, before opacity)
+    pub text: Color,
+    /// Background when key is pressed
+    pub bg_pressed: Color,
+    /// Background when key is released (can be gradient start)
+    pub bg_released: Color,
+    /// Optional gradient end color for released state
+    pub bg_gradient_end: Option<Color>,
+    /// Border color
+    pub border: Color,
+    /// Plus sign color
+    pub plus: Color,
+    /// Count badge text color
+    pub count: Color,
+    /// Count badge background color (for the oval)
+    pub count_bg: Color,
+}
+
+impl Palette {
+    /// Dark theme - classic dark with subtle blue pressed state (more transparent)
+    pub fn dark() -> Self {
+        Self {
+            text: Color::from_rgb(1.0, 1.0, 1.0),
+            bg_pressed: Color::from_rgba(0.2, 0.2, 0.5, 0.5),
+            bg_released: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+            bg_gradient_end: None,
+            border: Color::from_rgba(1.0, 1.0, 1.0, 0.25),
+            plus: Color::from_rgba(1.0, 1.0, 1.0, 0.5),
+            count: Color::from_rgba(1.0, 1.0, 1.0, 1.0),
+            count_bg: Color::from_rgba(0.0, 0.0, 0.0, 0.6),
+        }
+    }
+
+    /// Light theme - bright with dark text (more transparent)
+    pub fn light() -> Self {
+        Self {
+            text: Color::from_rgb(0.1, 0.1, 0.15),
+            bg_pressed: Color::from_rgba(0.6, 0.65, 0.85, 0.5),
+            bg_released: Color::from_rgba(0.95, 0.95, 0.97, 0.45),
+            bg_gradient_end: None,
+            border: Color::from_rgba(0.3, 0.3, 0.4, 0.3),
+            plus: Color::from_rgba(0.2, 0.2, 0.3, 0.6),
+            count: Color::from_rgba(0.1, 0.1, 0.15, 1.0),
+            count_bg: Color::from_rgba(1.0, 1.0, 1.0, 0.7),
+        }
+    }
+
+    /// Frosted glass - translucent with blur-like gradient
+    pub fn frosted() -> Self {
+        Self {
+            text: Color::from_rgb(1.0, 1.0, 1.0),
+            bg_pressed: Color::from_rgba(0.4, 0.5, 0.7, 0.7),
+            bg_released: Color::from_rgba(0.3, 0.35, 0.45, 0.5),
+            bg_gradient_end: Some(Color::from_rgba(0.2, 0.25, 0.35, 0.4)),
+            border: Color::from_rgba(1.0, 1.0, 1.0, 0.2),
+            plus: Color::from_rgba(1.0, 1.0, 1.0, 0.6),
+            count: Color::from_rgba(1.0, 1.0, 1.0, 1.0),
+            count_bg: Color::from_rgba(0.1, 0.15, 0.25, 0.7),
+        }
+    }
+
+    /// Kiwi theme - vibrant green with brown accents like the fruit
+    pub fn kiwi() -> Self {
+        Self {
+            // Cream/white text for contrast on green
+            text: Color::from_rgb(0.98, 0.97, 0.92),
+            // Pressed: darker kiwi green
+            bg_pressed: Color::from_rgba(0.35, 0.55, 0.18, 0.75),
+            // Released: kiwi flesh green with gradient to lighter center
+            bg_released: Color::from_rgba(0.55, 0.75, 0.25, 0.55),
+            bg_gradient_end: Some(Color::from_rgba(0.7, 0.82, 0.45, 0.45)),
+            // Brown border like kiwi skin
+            border: Color::from_rgba(0.45, 0.32, 0.2, 0.5),
+            // Lighter green for plus
+            plus: Color::from_rgba(0.85, 0.9, 0.75, 0.8),
+            // Dark seeds color for count
+            count: Color::from_rgba(0.15, 0.12, 0.08, 1.0),
+            // Cream background for count badge
+            count_bg: Color::from_rgba(0.95, 0.93, 0.85, 0.85),
+        }
+    }
+
+    /// Get palette from type
+    pub fn from_type(palette_type: PaletteType) -> Self {
+        match palette_type {
+            PaletteType::Dark => Self::dark(),
+            PaletteType::Light => Self::light(),
+            PaletteType::Frosted => Self::frosted(),
+            PaletteType::Kiwi => Self::kiwi(),
+        }
+    }
+
+    /// Apply opacity to all colors
+    pub fn with_opacity(&self, opacity: f32) -> Self {
+        Self {
+            text: color_with_opacity(self.text, opacity),
+            bg_pressed: color_with_opacity(self.bg_pressed, opacity),
+            bg_released: color_with_opacity(self.bg_released, opacity),
+            bg_gradient_end: self.bg_gradient_end.map(|c| color_with_opacity(c, opacity)),
+            border: color_with_opacity(self.border, opacity),
+            plus: color_with_opacity(self.plus, opacity),
+            count: color_with_opacity(self.count, opacity),
+            count_bg: color_with_opacity(self.count_bg, opacity),
+        }
+    }
+}
+
+/// Helper to apply opacity multiplier to a color
+fn color_with_opacity(color: Color, opacity: f32) -> Color {
+    Color::from_rgba(color.r, color.g, color.b, color.a * opacity)
+}
+
 /// User configuration - persisted via cosmic-config
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, CosmicConfigEntry)]
-#[version = 4]
+#[version = 5]
 pub struct Config {
     /// Whether keystroke visualization is enabled
     pub enabled: bool,
@@ -52,6 +208,8 @@ pub struct Config {
     pub fade_duration: f32,
     /// Color palette
     pub palette: PaletteType,
+    /// Position of the overlay on screen
+    pub position: OverlayPosition,
 }
 
 impl Default for Config {
@@ -61,6 +219,7 @@ impl Default for Config {
             key_size: 36.0,
             fade_duration: 5.0,
             palette: PaletteType::Dark,
+            position: OverlayPosition::BottomLeft,
         }
     }
 }
@@ -75,15 +234,9 @@ pub enum InputEvent {
         modifiers: Modifiers,
     },
     /// Mouse button press or release
-    MouseButton {
-        button: u32,
-        pressed: bool,
-    },
+    MouseButton { button: u32, pressed: bool },
     /// Mouse scroll
-    MouseScroll {
-        dx: f64,
-        dy: f64,
-    },
+    MouseScroll { dx: f64, dy: f64 },
 }
 
 /// Active modifier keys

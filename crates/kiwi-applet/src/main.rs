@@ -1,5 +1,6 @@
 //! COSMIC panel applet for Kiwi keystroke visualizer.
 
+mod position_selector;
 
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::{window::Id, Length, Limits, Subscription};
@@ -7,7 +8,8 @@ use cosmic::iced_widget::svg::{self, Svg};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::prelude::*;
 use cosmic::widget;
-use kiwi_common::{Config, PaletteType, APP_ID};
+use kiwi_common::{keystroke_preview, Config, OverlayPosition, PaletteType, APP_ID};
+use position_selector::PositionSelector;
 
 const SERVICE_NAME: &str = "kiwi-daemon.service";
 
@@ -68,10 +70,11 @@ struct KiwiApplet {
 enum Message {
     TogglePopup,
     PopupClosed(Id),
-    ToggleActive(bool),  // Combined: starts/stops daemon and enables/disables
+    ToggleActive(bool), // Combined: starts/stops daemon and enables/disables
     SetKeySize(f32),
     SetFadeDuration(f32),
     SetPaletteIndex(usize),
+    SetPosition(OverlayPosition),
     SaveConfig,
     ConfigChanged(Config),
     RefreshDaemonStatus,
@@ -113,16 +116,16 @@ impl cosmic::Application for KiwiApplet {
             popup: None,
             config,
             config_handler,
-            daemon_running: false,  // Will be updated by async check
+            daemon_running: false, // Will be updated by async check
             pending_save: false,
         };
-        
+
         // Schedule async daemon status check
         let task = cosmic::task::future(async {
             let running = is_daemon_running_async().await;
             cosmic::Action::App(Message::DaemonStatusChecked(running))
         });
-        
+
         (app, task)
     }
 
@@ -132,9 +135,13 @@ impl cosmic::Application for KiwiApplet {
 
     fn view(&self) -> Element<'_, Self::Message> {
         let is_active = self.config.enabled && self.daemon_running;
-        
-        let icon_data = if is_active { ICON_KIWI_ON } else { ICON_KIWI_OFF };
-        
+
+        let icon_data = if is_active {
+            ICON_KIWI_ON
+        } else {
+            ICON_KIWI_OFF
+        };
+
         let handle = svg::Handle::from_memory(icon_data);
         let suggested = self.core.applet.suggested_size(true);
         let (major_padding, minor_padding) = self.core.applet.suggested_padding(true);
@@ -143,7 +150,7 @@ impl cosmic::Application for KiwiApplet {
         } else {
             (minor_padding, major_padding)
         };
-        
+
         // kiwi-on: use its own colors (no theme override)
         // kiwi-off: apply theme color
         let svg_icon = if is_active {
@@ -162,14 +169,12 @@ impl cosmic::Application for KiwiApplet {
                 })))
         };
 
-        widget::button::custom(
-            widget::layer_container(svg_icon).center(Length::Fill)
-        )
-        .width(Length::Fixed((suggested.0 + 2 * horizontal_padding) as f32))
-        .height(Length::Fixed((suggested.1 + 2 * vertical_padding) as f32))
-        .class(cosmic::theme::Button::AppletIcon)
-        .on_press(Message::TogglePopup)
-        .into()
+        widget::button::custom(widget::layer_container(svg_icon).center(Length::Fill))
+            .width(Length::Fixed((suggested.0 + 2 * horizontal_padding) as f32))
+            .height(Length::Fixed((suggested.1 + 2 * vertical_padding) as f32))
+            .class(cosmic::theme::Button::AppletIcon)
+            .on_press(Message::TogglePopup)
+            .into()
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
@@ -180,30 +185,91 @@ impl cosmic::Application for KiwiApplet {
 
         // Active = daemon running AND enabled
         let is_active = self.daemon_running && self.config.enabled;
-        
-        let content_list = widget::list_column()
-            .padding(5)
-            .spacing(0)
-            .add(widget::settings::item(
-                "Active",
-                widget::toggler(is_active).on_toggle(Message::ToggleActive),
-            ))
-            .add(widget::settings::item(
-                format!("Size: {:.0}", self.config.key_size),
-                widget::slider(32.0..=256.0, self.config.key_size, Message::SetKeySize)
-                    .width(cosmic::iced::Length::Fixed(120.0)),
-            ))
-            .add(widget::settings::item(
-                format!("Fade: {:.1}s", self.config.fade_duration),
-                widget::slider(1.0..=10.0, self.config.fade_duration, Message::SetFadeDuration)
-                    .width(cosmic::iced::Length::Fixed(120.0)),
-            ))
-            .add(widget::settings::item(
-                "Theme",
-                widget::dropdown(PALETTE_NAMES, current_index, Message::SetPaletteIndex),
-            ));
 
-        self.core.applet.popup_container(content_list).into()
+        // Position selector widget (larger size)
+        let position_selector =
+            PositionSelector::new(160.0, self.config.position, Message::SetPosition);
+
+        // Sample keystroke preview (scales with slider, cap at 120 for applet)
+        let preview_size = self.config.key_size.min(120.0);
+        let preview = keystroke_preview::<Message>(preview_size, self.config.palette);
+
+        // Fixed-size container for preview (tall enough for max preview size)
+        let preview_container = widget::container(preview)
+            .width(Length::Fill)
+            .height(Length::Fixed(135.0))
+            .align_x(cosmic::iced::alignment::Horizontal::Center)
+            .align_y(cosmic::iced::alignment::Vertical::Center);
+
+        // Position selector with tooltip (centered, no label, with padding)
+        let position_with_tooltip = widget::tooltip(
+            widget::container(position_selector)
+                .width(Length::Fill)
+                .padding([10, 0]) // vertical padding
+                .align_x(cosmic::iced::alignment::Horizontal::Center),
+            "Position",
+            widget::tooltip::Position::Bottom,
+        );
+
+        let content = widget::column()
+            .padding(10)
+            .spacing(8)
+            // Active toggle at top
+            .push(
+                widget::row()
+                    .spacing(10)
+                    .align_y(cosmic::iced::Alignment::Center)
+                    .push(widget::text::body("Active"))
+                    .push(widget::Space::with_width(Length::Fill))
+                    .push(widget::toggler(is_active).on_toggle(Message::ToggleActive)),
+            )
+            // Separator
+            .push(widget::divider::horizontal::default())
+            // Preview in fixed container (centered)
+            .push(preview_container)
+            // Size slider and Theme dropdown on same row
+            .push(
+                widget::row()
+                    .spacing(10)
+                    .align_y(cosmic::iced::Alignment::Center)
+                    .push(widget::tooltip(
+                        widget::slider(32.0..=256.0, self.config.key_size, Message::SetKeySize)
+                            .width(Length::Fill),
+                        "Size",
+                        widget::tooltip::Position::Top,
+                    ))
+                    .push(widget::tooltip(
+                        widget::dropdown(PALETTE_NAMES, current_index, Message::SetPaletteIndex),
+                        "Theme",
+                        widget::tooltip::Position::Top,
+                    )),
+            )
+            // Separator
+            .push(widget::divider::horizontal::default())
+            // Fade slider
+            .push(
+                widget::row()
+                    .spacing(10)
+                    .align_y(cosmic::iced::Alignment::Center)
+                    .push(widget::text::body(format!(
+                        "Fade: {:.1}s",
+                        self.config.fade_duration
+                    )))
+                    .push(
+                        widget::slider(
+                            1.0..=10.0,
+                            self.config.fade_duration,
+                            Message::SetFadeDuration,
+                        )
+                        .width(Length::Fill),
+                    ),
+            )
+            // Separator
+            .push(widget::divider::horizontal::default())
+            // Position selector (centered, no label, with tooltip)
+            .push(position_with_tooltip);
+
+        self.core.applet.popup_container(content).into()
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
@@ -261,7 +327,7 @@ impl cosmic::Application for KiwiApplet {
                     self.config.enabled = true;
                     self.save_config();
                     log::info!("Keystrokes enabled");
-                    
+
                     if !self.daemon_running {
                         log::info!("Starting daemon...");
                         return cosmic::task::future(async {
@@ -274,7 +340,7 @@ impl cosmic::Application for KiwiApplet {
                     self.config.enabled = false;
                     self.save_config();
                     log::info!("Keystrokes disabled");
-                    
+
                     if self.daemon_running {
                         log::info!("Stopping daemon...");
                         return cosmic::task::future(async {
@@ -306,17 +372,21 @@ impl cosmic::Application for KiwiApplet {
             }
             Message::SetKeySize(size) => {
                 self.config.key_size = size;
-                self.pending_save = true;  // Debounce - don't save immediately
+                self.pending_save = true; // Debounce - don't save immediately
             }
             Message::SetFadeDuration(duration) => {
                 self.config.fade_duration = duration;
-                self.pending_save = true;  // Debounce - don't save immediately
+                self.pending_save = true; // Debounce - don't save immediately
             }
             Message::SetPaletteIndex(index) => {
                 if let Some(palette) = PaletteType::ALL.get(index) {
                     self.config.palette = *palette;
-                    self.save_config();  // Save immediately for dropdown
+                    self.save_config(); // Save immediately for dropdown
                 }
+            }
+            Message::SetPosition(position) => {
+                self.config.position = position;
+                self.save_config(); // Save immediately
             }
             Message::SaveConfig => {
                 if self.pending_save {

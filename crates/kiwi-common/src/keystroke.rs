@@ -2,167 +2,50 @@
 
 use std::time::Instant;
 
-use cosmic::iced::{self, Background, Border, Color, Length, gradient};
+use crate::{OverlayPosition, Palette, PaletteType};
+use cosmic::iced::{self, gradient, Background, Border, Color, Length};
 use cosmic::iced_widget::container;
 use cosmic::iced_widget::svg::{self, Svg};
 use cosmic::widget::{self, text};
 use cosmic::Element;
-use kiwi_common::PaletteType;
 
-
-// Embed icons at compile time (path relative to this file: src/ui/keystroke.rs)
-const ICON_RETURN: &[u8] = include_bytes!("../../../../data/icons/kiwi-return-symbolic.svg");
-const ICON_BACKSPACE: &[u8] = include_bytes!("../../../../data/icons/kiwi-backspace-symbolic.svg");
-const ICON_SHIFT: &[u8] = include_bytes!("../../../../data/icons/kiwi-shift-symbolic.svg");
-const ICON_CTRL: &[u8] = include_bytes!("../../../../data/icons/kiwi-control-symbolic.svg");
-const ICON_ALT: &[u8] = include_bytes!("../../../../data/icons/kiwi-alt.svg");
-const ICON_TAB: &[u8] = include_bytes!("../../../../data/icons/kiwi-tab-symbolic.svg");
-const ICON_SPACE: &[u8] = include_bytes!("../../../../data/icons/kiwi-space-symbolic.svg");
-const ICON_CAPS: &[u8] = include_bytes!("../../../../data/icons/kiwi-capslock-symbolic.svg");
-const ICON_SUPER: &[u8] = include_bytes!("../../../../data/icons/kiwi-super-symbolic.svg");
-const ICON_ESCAPE: &[u8] = include_bytes!("../../../../data/icons/kiwi-escape-symbolic.svg");
-const ICON_LEFT_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-left-click-symbolic.svg");
-const ICON_RIGHT_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-right-click-symbolic.svg");
-const ICON_MIDDLE_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-middle-click-symbolic.svg");
-const ICON_SCROLL_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-up-symbolic.svg");
-const ICON_SCROLL_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-down-symbolic.svg");
+// Embed icons at compile time (path relative to this file: kiwi-common/src/keystroke.rs)
+const ICON_RETURN: &[u8] = include_bytes!("../../../data/icons/kiwi-return-symbolic.svg");
+const ICON_BACKSPACE: &[u8] = include_bytes!("../../../data/icons/kiwi-backspace-symbolic.svg");
+const ICON_SHIFT: &[u8] = include_bytes!("../../../data/icons/kiwi-shift-symbolic.svg");
+const ICON_CTRL: &[u8] = include_bytes!("../../../data/icons/kiwi-control-symbolic.svg");
+const ICON_ALT: &[u8] = include_bytes!("../../../data/icons/kiwi-alt.svg");
+const ICON_TAB: &[u8] = include_bytes!("../../../data/icons/kiwi-tab-symbolic.svg");
+const ICON_SPACE: &[u8] = include_bytes!("../../../data/icons/kiwi-space-symbolic.svg");
+const ICON_CAPS: &[u8] = include_bytes!("../../../data/icons/kiwi-capslock-symbolic.svg");
+const ICON_SUPER: &[u8] = include_bytes!("../../../data/icons/kiwi-super-symbolic.svg");
+const ICON_ESCAPE: &[u8] = include_bytes!("../../../data/icons/kiwi-escape-symbolic.svg");
+const ICON_LEFT_CLICK: &[u8] = include_bytes!("../../../data/icons/kiwi-left-click-symbolic.svg");
+const ICON_RIGHT_CLICK: &[u8] = include_bytes!("../../../data/icons/kiwi-right-click-symbolic.svg");
+const ICON_MIDDLE_CLICK: &[u8] =
+    include_bytes!("../../../data/icons/kiwi-middle-click-symbolic.svg");
+const ICON_SCROLL_UP: &[u8] = include_bytes!("../../../data/icons/kiwi-scroll-up-symbolic.svg");
+const ICON_SCROLL_DOWN: &[u8] = include_bytes!("../../../data/icons/kiwi-scroll-down-symbolic.svg");
 // Touchpad gestures
-const ICON_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-tap.svg");
-const ICON_TWO_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-tap.svg");
-const ICON_TWO_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-up.svg");
-const ICON_TWO_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-down.svg");
-const ICON_TWO_LEFT: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-left.svg");
-const ICON_TWO_RIGHT: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-right.svg");
-const ICON_THREE_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-three-tap.svg");
-const ICON_THREE_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-three-up.svg");
-const ICON_THREE_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-three-down.svg");
-const ICON_FOUR_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-four-tap.svg");
-const ICON_FOUR_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-four-up.svg");
-const ICON_FOUR_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-four-down.svg");
+const ICON_TAP: &[u8] = include_bytes!("../../../data/icons/kiwi-tap.svg");
+const ICON_TWO_TAP: &[u8] = include_bytes!("../../../data/icons/kiwi-two-tap.svg");
+const ICON_TWO_UP: &[u8] = include_bytes!("../../../data/icons/kiwi-two-up.svg");
+const ICON_TWO_DOWN: &[u8] = include_bytes!("../../../data/icons/kiwi-two-down.svg");
+const ICON_TWO_LEFT: &[u8] = include_bytes!("../../../data/icons/kiwi-two-left.svg");
+const ICON_TWO_RIGHT: &[u8] = include_bytes!("../../../data/icons/kiwi-two-right.svg");
+const ICON_THREE_TAP: &[u8] = include_bytes!("../../../data/icons/kiwi-three-tap.svg");
+const ICON_THREE_UP: &[u8] = include_bytes!("../../../data/icons/kiwi-three-up.svg");
+const ICON_THREE_DOWN: &[u8] = include_bytes!("../../../data/icons/kiwi-three-down.svg");
+const ICON_FOUR_TAP: &[u8] = include_bytes!("../../../data/icons/kiwi-four-tap.svg");
+const ICON_FOUR_UP: &[u8] = include_bytes!("../../../data/icons/kiwi-four-up.svg");
+const ICON_FOUR_DOWN: &[u8] = include_bytes!("../../../data/icons/kiwi-four-down.svg");
 // Special emblems and drag icons
-const ICON_PRESSED_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-pressed-down.svg");
-const ICON_CLICK_DRAG: &[u8] = include_bytes!("../../../../data/icons/kiwi-click-drag.svg");
-const ICON_TAP_DRAG: &[u8] = include_bytes!("../../../../data/icons/kiwi-tap-drag.svg");
-
-
+const ICON_PRESSED_DOWN: &[u8] = include_bytes!("../../../data/icons/kiwi-pressed-down.svg");
+const ICON_CLICK_DRAG: &[u8] = include_bytes!("../../../data/icons/kiwi-click-drag.svg");
+const ICON_TAP_DRAG: &[u8] = include_bytes!("../../../data/icons/kiwi-tap-drag.svg");
 
 /// Threshold for combining repeated keystrokes (in milliseconds)
 pub const REPEAT_THRESHOLD_MS: u128 = 200;
-
-/// Color palette for keystroke visualization
-#[derive(Debug, Clone, Copy)]
-pub struct Palette {
-    /// Text color (base, before opacity)
-    pub text: Color,
-    /// Background when key is pressed
-    pub bg_pressed: Color,
-    /// Background when key is released (can be gradient start)
-    pub bg_released: Color,
-    /// Optional gradient end color for released state
-    pub bg_gradient_end: Option<Color>,
-    /// Border color
-    pub border: Color,
-    /// Plus sign color
-    pub plus: Color,
-    /// Count badge text color
-    pub count: Color,
-    /// Count badge background color (for the oval)
-    pub count_bg: Color,
-}
-
-impl Palette {
-    /// Dark theme - classic dark with subtle blue pressed state (more transparent)
-    pub fn dark() -> Self {
-        Self {
-            text: Color::from_rgb(1.0, 1.0, 1.0),
-            bg_pressed: Color::from_rgba(0.2, 0.2, 0.5, 0.5),
-            bg_released: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
-            bg_gradient_end: None,
-            border: Color::from_rgba(1.0, 1.0, 1.0, 0.25),
-            plus: Color::from_rgba(1.0, 1.0, 1.0, 0.5),
-            count: Color::from_rgba(1.0, 1.0, 1.0, 1.0),
-            count_bg: Color::from_rgba(0.0, 0.0, 0.0, 0.6),
-        }
-    }
-
-    /// Light theme - bright with dark text (more transparent)
-    pub fn light() -> Self {
-        Self {
-            text: Color::from_rgb(0.1, 0.1, 0.15),
-            bg_pressed: Color::from_rgba(0.6, 0.65, 0.85, 0.5),
-            bg_released: Color::from_rgba(0.95, 0.95, 0.97, 0.45),
-            bg_gradient_end: None,
-            border: Color::from_rgba(0.3, 0.3, 0.4, 0.3),
-            plus: Color::from_rgba(0.2, 0.2, 0.3, 0.6),
-            count: Color::from_rgba(0.1, 0.1, 0.15, 1.0),
-            count_bg: Color::from_rgba(1.0, 1.0, 1.0, 0.7),
-        }
-    }
-
-    /// Frosted glass - translucent with blur-like gradient
-    pub fn frosted() -> Self {
-        Self {
-            text: Color::from_rgb(1.0, 1.0, 1.0),
-            bg_pressed: Color::from_rgba(0.4, 0.5, 0.7, 0.7),
-            bg_released: Color::from_rgba(0.3, 0.35, 0.45, 0.5),
-            bg_gradient_end: Some(Color::from_rgba(0.2, 0.25, 0.35, 0.4)),
-            border: Color::from_rgba(1.0, 1.0, 1.0, 0.2),
-            plus: Color::from_rgba(1.0, 1.0, 1.0, 0.6),
-            count: Color::from_rgba(1.0, 1.0, 1.0, 1.0),
-            count_bg: Color::from_rgba(0.1, 0.15, 0.25, 0.7),
-        }
-    }
-
-    /// Kiwi theme - vibrant green with brown accents like the fruit
-    pub fn kiwi() -> Self {
-        Self {
-            // Cream/white text for contrast on green
-            text: Color::from_rgb(0.98, 0.97, 0.92),
-            // Pressed: darker kiwi green
-            bg_pressed: Color::from_rgba(0.35, 0.55, 0.18, 0.75),
-            // Released: kiwi flesh green with gradient to lighter center
-            bg_released: Color::from_rgba(0.55, 0.75, 0.25, 0.55),
-            bg_gradient_end: Some(Color::from_rgba(0.7, 0.82, 0.45, 0.45)),
-            // Brown border like kiwi skin
-            border: Color::from_rgba(0.45, 0.32, 0.2, 0.5),
-            // Lighter green for plus
-            plus: Color::from_rgba(0.85, 0.9, 0.75, 0.8),
-            // Dark seeds color for count
-            count: Color::from_rgba(0.15, 0.12, 0.08, 1.0),
-            // Cream background for count badge
-            count_bg: Color::from_rgba(0.95, 0.93, 0.85, 0.85),
-        }
-    }
-
-    /// Get palette from type
-    pub fn from_type(palette_type: PaletteType) -> Self {
-        match palette_type {
-            PaletteType::Dark => Self::dark(),
-            PaletteType::Light => Self::light(),
-            PaletteType::Frosted => Self::frosted(),
-            PaletteType::Kiwi => Self::kiwi(),
-        }
-    }
-
-    /// Apply opacity to all colors
-    pub fn with_opacity(&self, opacity: f32) -> Self {
-        Self {
-            text: color_with_opacity(self.text, opacity),
-            bg_pressed: color_with_opacity(self.bg_pressed, opacity),
-            bg_released: color_with_opacity(self.bg_released, opacity),
-            bg_gradient_end: self.bg_gradient_end.map(|c| color_with_opacity(c, opacity)),
-            border: color_with_opacity(self.border, opacity),
-            plus: color_with_opacity(self.plus, opacity),
-            count: color_with_opacity(self.count, opacity),
-            count_bg: color_with_opacity(self.count_bg, opacity),
-        }
-    }
-}
-
-/// Helper to multiply color's alpha by opacity
-fn color_with_opacity(color: Color, opacity: f32) -> Color {
-    Color::from_rgba(color.r, color.g, color.b, color.a * opacity)
-}
 
 /// Represents a keystroke to display
 #[derive(Debug, Clone)]
@@ -216,7 +99,12 @@ impl KeyModifiers {
         if keys.is_empty() {
             None
         } else {
-            Some(Keystroke { keys, pressed, timestamp: Instant::now(), count: 1 })
+            Some(Keystroke {
+                keys,
+                pressed,
+                timestamp: Instant::now(),
+                count: 1,
+            })
         }
     }
 }
@@ -236,7 +124,12 @@ impl Keystroke {
     pub fn combination(modifiers: &KeyModifiers, key: impl Into<String>, pressed: bool) -> Self {
         let mut keys = modifiers.to_parts();
         keys.push(key.into());
-        Self { keys, pressed, timestamp: Instant::now(), count: 1 }
+        Self {
+            keys,
+            pressed,
+            timestamp: Instant::now(),
+            count: 1,
+        }
     }
 
     /// Check if this keystroke matches another (same keys)
@@ -279,19 +172,19 @@ impl Keystroke {
     /// Stays at 1.0 for the first 70% of duration, then fades in the last 30% with easing
     pub fn opacity(&self, fade_duration_secs: f32) -> f32 {
         if self.pressed {
-            1.0  // Pressed keys are always fully visible
+            1.0 // Pressed keys are always fully visible
         } else {
             let age = self.age_secs();
-            let fade_start = fade_duration_secs * 0.7;  // Start fading at 70%
-            
+            let fade_start = fade_duration_secs * 0.7; // Start fading at 70%
+
             if age >= fade_duration_secs {
                 0.0
             } else if age <= fade_start {
-                1.0  // Full opacity for first 70%
+                1.0 // Full opacity for first 70%
             } else {
                 // Fade from 1.0 to 0.0 in the last 30% with ease-out
                 let fade_phase = fade_duration_secs - fade_start;
-                let t = (age - fade_start) / fade_phase;  // 0.0 -> 1.0
+                let t = (age - fade_start) / fade_phase; // 0.0 -> 1.0
                 let eased = ease_in_cubic(t);
                 1.0 - eased
             }
@@ -308,7 +201,7 @@ fn ease_in_cubic(t: f32) -> f32 {
 // Style constants
 const BORDER_WIDTH: f32 = 1.0;
 const BORDER_RADIUS: f32 = 6.0;
-const PLUS_WIDTH: f32 = 10.0;  // Width for the "+" separator
+const PLUS_WIDTH: f32 = 10.0; // Width for the "+" separator
 const KEY_GAP: f32 = 4.0;
 
 /// Calculate font size based on key size
@@ -369,20 +262,20 @@ fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
 fn key_content<'a, M: 'a>(key: &str, text_color: Color, key_size: f32) -> Element<'a, M> {
     let icon_size = icon_size_for_key(key_size);
     let font_size = font_size_for_key(key_size);
-    
+
     if let Some((icon_data, apply_color)) = get_icon_for_key_with_style(key) {
         // Use embedded SVG icon
         let handle = svg::Handle::from_memory(icon_data);
         let mut svg = Svg::new(handle)
             .width(Length::Fixed(icon_size))
             .height(Length::Fixed(icon_size));
-        
+
         if apply_color {
             svg = svg.class(cosmic::theme::Svg::custom(move |_| svg::Style {
                 color: Some(text_color),
             }));
         }
-        
+
         svg.into()
     } else {
         // Use text
@@ -409,13 +302,13 @@ fn pressed_emblem<'a, M: 'a>(text_color: Color, emblem_size: f32) -> Element<'a,
 
 /// Wraps key content with the pressed emblem at the bottom if pressed
 fn key_content_with_emblem<'a, M: 'a>(
-    key: &str, 
-    text_color: Color, 
-    key_size: f32, 
+    key: &str,
+    text_color: Color,
+    key_size: f32,
     pressed: bool,
 ) -> Element<'a, M> {
     let content = key_content(key, text_color, key_size);
-    
+
     if pressed {
         let emblem_size = key_size * 0.3;
         widget::column()
@@ -430,31 +323,31 @@ fn key_content_with_emblem<'a, M: 'a>(
 }
 
 /// Renders a keystroke widget with opacity based on age
-/// 
+///
 /// - Single key: square with border
 /// - Combination: outer container with border, inner key boxes (no border) + "+" separators
 pub fn keystroke_widget<'a, M: 'a>(
-    keystroke: &Keystroke, 
-    key_size: f32, 
+    keystroke: &Keystroke,
+    key_size: f32,
     fade_duration: f32,
     palette_type: PaletteType,
 ) -> Element<'a, M> {
     let opacity = keystroke.opacity(fade_duration);
     let plus_font_size = plus_font_size_for_key(key_size);
     let palette = Palette::from_type(palette_type).with_opacity(opacity);
-    
+
     let background = if keystroke.pressed {
         Background::Color(palette.bg_pressed)
     } else if let Some(gradient_end) = palette.bg_gradient_end {
         // Use gradient for frosted glass effect
-        let grad = gradient::Linear::new(std::f32::consts::PI / 4.0)  // 45 degree angle
+        let grad = gradient::Linear::new(std::f32::consts::PI / 4.0) // 45 degree angle
             .add_stop(0.0, palette.bg_released)
             .add_stop(1.0, gradient_end);
         Background::Gradient(gradient::Gradient::Linear(grad))
     } else {
         Background::Color(palette.bg_released)
     };
-    
+
     let border_color = palette.border;
     let text_color = palette.text;
     let plus_color = palette.plus;
@@ -484,12 +377,17 @@ pub fn keystroke_widget<'a, M: 'a>(
             }
             // Key box: key_size square, no border, centered content (text or icon + emblem if pressed)
             row_children.push(
-                widget::container(key_content_with_emblem(key, text_color, key_size, keystroke.pressed))
-                    .width(Length::Fixed(key_size))
-                    .height(Length::Fixed(key_size))
-                    .align_x(iced::alignment::Horizontal::Center)
-                    .align_y(iced::alignment::Vertical::Center)
-                    .into(),
+                widget::container(key_content_with_emblem(
+                    key,
+                    text_color,
+                    key_size,
+                    keystroke.pressed,
+                ))
+                .width(Length::Fixed(key_size))
+                .height(Length::Fixed(key_size))
+                .align_x(iced::alignment::Horizontal::Center)
+                .align_y(iced::alignment::Vertical::Center)
+                .into(),
             );
         }
 
@@ -502,14 +400,16 @@ pub fn keystroke_widget<'a, M: 'a>(
         .height(Length::Fixed(key_size))
         .align_x(iced::alignment::Horizontal::Center)
         .align_y(iced::alignment::Vertical::Center)
-        .class(cosmic::theme::Container::custom(move |_| container::Style {
-            background: Some(background),
-            border: Border {
-                color: border_color,
-                width: BORDER_WIDTH,
-                radius: BORDER_RADIUS.into(),
-            },
-            ..Default::default()
+        .class(cosmic::theme::Container::custom(move |_| {
+            container::Style {
+                background: Some(background),
+                border: Border {
+                    color: border_color,
+                    width: BORDER_WIDTH,
+                    radius: BORDER_RADIUS.into(),
+                },
+                ..Default::default()
+            }
         }));
 
         // Add count badge if repeated
@@ -522,15 +422,17 @@ pub fn keystroke_widget<'a, M: 'a>(
                     .class(cosmic::theme::Text::Color(count_color))
                     .align_x(iced::alignment::Horizontal::Center),
             )
-            .padding([2, 6])  // vertical, horizontal padding
-            .class(cosmic::theme::Container::custom(move |_| container::Style {
-                background: Some(Background::Color(count_bg)),
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: (count_font_size * 0.6).into(),  // pill/oval shape
-                },
-                ..Default::default()
+            .padding([2, 6]) // vertical, horizontal padding
+            .class(cosmic::theme::Container::custom(move |_| {
+                container::Style {
+                    background: Some(Background::Color(count_bg)),
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: (count_font_size * 0.6).into(), // pill/oval shape
+                    },
+                    ..Default::default()
+                }
             }));
             widget::column()
                 .push(combo_widget)
@@ -543,14 +445,18 @@ pub fn keystroke_widget<'a, M: 'a>(
         }
     } else {
         // Single key: square with border
-        let key_widget = widget::container(
-            key_content_with_emblem(&keystroke.keys[0], text_color, key_size, keystroke.pressed)
-        )
-            .width(Length::Fixed(key_size))
-            .height(Length::Fixed(key_size))
-            .align_x(iced::alignment::Horizontal::Center)
-            .align_y(iced::alignment::Vertical::Center)
-            .class(cosmic::theme::Container::custom(move |_| container::Style {
+        let key_widget = widget::container(key_content_with_emblem(
+            &keystroke.keys[0],
+            text_color,
+            key_size,
+            keystroke.pressed,
+        ))
+        .width(Length::Fixed(key_size))
+        .height(Length::Fixed(key_size))
+        .align_x(iced::alignment::Horizontal::Center)
+        .align_y(iced::alignment::Vertical::Center)
+        .class(cosmic::theme::Container::custom(move |_| {
+            container::Style {
                 background: Some(background),
                 border: Border {
                     color: border_color,
@@ -558,7 +464,8 @@ pub fn keystroke_widget<'a, M: 'a>(
                     radius: BORDER_RADIUS.into(),
                 },
                 ..Default::default()
-            }));
+            }
+        }));
 
         // Add count badge if repeated
         if keystroke.count > 1 {
@@ -570,15 +477,17 @@ pub fn keystroke_widget<'a, M: 'a>(
                     .class(cosmic::theme::Text::Color(count_color))
                     .align_x(iced::alignment::Horizontal::Center),
             )
-            .padding([2, 6])  // vertical, horizontal padding
-            .class(cosmic::theme::Container::custom(move |_| container::Style {
-                background: Some(Background::Color(count_bg)),
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: (count_font_size * 0.6).into(),  // pill/oval shape
-                },
-                ..Default::default()
+            .padding([2, 6]) // vertical, horizontal padding
+            .class(cosmic::theme::Container::custom(move |_| {
+                container::Style {
+                    background: Some(Background::Color(count_bg)),
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: (count_font_size * 0.6).into(), // pill/oval shape
+                    },
+                    ..Default::default()
+                }
             }));
             widget::column()
                 .push(key_widget)
@@ -590,6 +499,50 @@ pub fn keystroke_widget<'a, M: 'a>(
             key_widget.into()
         }
     }
+}
+
+/// Creates a simple preview keystroke widget for the applet settings.
+/// Shows a single "A" key with no fade animation.
+pub fn keystroke_preview<'a, M: 'a>(key_size: f32, palette_type: PaletteType) -> Element<'a, M> {
+    let palette = Palette::from_type(palette_type);
+
+    let background = if let Some(gradient_end) = palette.bg_gradient_end {
+        let grad = gradient::Linear::new(std::f32::consts::PI / 4.0)
+            .add_stop(0.0, palette.bg_released)
+            .add_stop(1.0, gradient_end);
+        Background::Gradient(gradient::Gradient::Linear(grad))
+    } else {
+        Background::Color(palette.bg_released)
+    };
+
+    let border_color = palette.border;
+    let text_color = palette.text;
+    let font_size = key_size * 0.55;
+
+    // Single key showing "A"
+    widget::container(
+        text::Text::new("A")
+            .size(font_size)
+            .class(cosmic::theme::Text::Color(text_color))
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center),
+    )
+    .width(Length::Fixed(key_size))
+    .height(Length::Fixed(key_size))
+    .align_x(iced::alignment::Horizontal::Center)
+    .align_y(iced::alignment::Vertical::Center)
+    .class(cosmic::theme::Container::custom(move |_| {
+        container::Style {
+            background: Some(background),
+            border: Border {
+                color: border_color,
+                width: BORDER_WIDTH,
+                radius: BORDER_RADIUS.into(),
+            },
+            ..Default::default()
+        }
+    }))
+    .into()
 }
 
 // Margin/padding inside the window
@@ -609,14 +562,15 @@ impl Keystroke {
     }
 }
 
-/// Renders a row of keystrokes, right-aligned with newest on the right.
+/// Renders a row of keystrokes with alignment based on position.
 /// Filters out expired keystrokes and only includes ones that fit in available width.
 pub fn keystrokes_row<'a, M: 'a + Clone>(
-    keystrokes: &[Keystroke], 
-    key_size: f32, 
+    keystrokes: &[Keystroke],
+    key_size: f32,
     fade_duration: f32,
     palette_type: PaletteType,
     window_width: f32,
+    position: OverlayPosition,
 ) -> Element<'a, M> {
     let available_width = window_width - WINDOW_MARGIN;
     let mut total_width: f32 = 0.0;
@@ -630,17 +584,21 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         }
 
         let width = keystroke.estimated_width(key_size);
-        let gap = if fitting_keystrokes.is_empty() { 0.0 } else { KEY_GAP };
-        
+        let gap = if fitting_keystrokes.is_empty() {
+            0.0
+        } else {
+            KEY_GAP
+        };
+
         if total_width + gap + width <= available_width {
             total_width += gap + width;
             fitting_keystrokes.push(keystroke);
         } else {
-            break;  // No more space
+            break; // No more space
         }
     }
 
-    // Reverse so newest is on the right
+    // Reverse so newest is on the appropriate side
     fitting_keystrokes.reverse();
 
     let children: Vec<Element<'a, M>> = fitting_keystrokes
@@ -648,13 +606,22 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         .map(|k| keystroke_widget(k, key_size, fade_duration, palette_type))
         .collect();
 
+    // Determine horizontal alignment based on position
+    let h_align = match position {
+        OverlayPosition::TopLeft | OverlayPosition::BottomLeft => iced::alignment::Horizontal::Left,
+        OverlayPosition::TopRight | OverlayPosition::BottomRight => {
+            iced::alignment::Horizontal::Right
+        }
+        OverlayPosition::BottomCenter => iced::alignment::Horizontal::Center,
+    };
+
     widget::container(
         widget::row::with_children(children)
             .spacing(KEY_GAP)
-            .align_y(iced::Alignment::Start)  // Align to top
+            .align_y(iced::Alignment::Start), // Align to top
     )
     .width(Length::Fill)
-    .align_x(iced::alignment::Horizontal::Right)
+    .align_x(h_align)
     .align_y(iced::alignment::Vertical::Top)
     .into()
 }

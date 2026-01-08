@@ -10,7 +10,7 @@ use std::os::unix::io::{AsFd, OwnedFd};
 use std::path::Path;
 
 pub use input::event::keyboard::KeyState;
-pub use input::event::pointer::{ButtonState, Axis};
+pub use input::event::pointer::{Axis, ButtonState};
 
 /// Errors that can occur during input capture
 #[derive(Debug)]
@@ -67,10 +67,7 @@ pub enum SwipeDirection {
 #[derive(Debug, Clone)]
 pub enum InputEvent {
     /// Key press or release
-    Key {
-        key: u32,
-        state: KeyState,
-    },
+    Key { key: u32, state: KeyState },
     /// Mouse button press or release
     MouseButton {
         button: u32,
@@ -79,29 +76,18 @@ pub enum InputEvent {
         is_touchpad: bool,
     },
     /// Mouse/pointer motion (used to detect drag)
-    MouseMotion {
-        dx: f64,
-        dy: f64,
-    },
+    MouseMotion { dx: f64, dy: f64 },
     /// Mouse wheel scroll
-    MouseScroll {
-        axis: Axis,
-        value: f64,
-    },
+    MouseScroll { axis: Axis, value: f64 },
     /// Touchpad two-finger scroll
-    TouchpadScroll {
-        axis: Axis,
-        value: f64,
-    },
+    TouchpadScroll { axis: Axis, value: f64 },
     /// Multi-finger swipe gesture (3+ fingers)
     Swipe {
         finger_count: i32,
         direction: SwipeDirection,
     },
     /// Multi-finger hold/tap gesture (3+ fingers held briefly without movement)
-    Hold {
-        finger_count: i32,
-    },
+    Hold { finger_count: i32 },
 }
 
 /// Tracks ongoing swipe gesture state
@@ -131,48 +117,51 @@ impl InputCapture {
     /// Create a new input capture context
     pub fn new() -> Result<Self, CaptureError> {
         let mut libinput = Libinput::new_with_udev(DirectAccess);
-        
+
         libinput
             .udev_assign_seat("seat0")
             .map_err(|_| CaptureError::SeatError("Failed to assign seat0".into()))?;
-        
+
         // Process initial device events and enable tap-to-click on touchpads
         libinput.dispatch().ok();
         for event in libinput.by_ref() {
-            use input::event::Event;
             use input::event::device::DeviceEvent;
+            use input::event::Event;
             if let Event::Device(DeviceEvent::Added(dev_event)) = event {
                 use input::event::EventTrait;
                 let mut device = dev_event.device();
                 Self::configure_device(&mut device);
             }
         }
-        
+
         log::info!("Input capture initialized on seat0");
-        Ok(Self { 
+        Ok(Self {
             libinput,
             swipe_state: SwipeState::default(),
             touchpad_scroll: ScrollAccumulator::default(),
         })
     }
-    
+
     /// Configure a device (enable tap-to-click for touchpads)
     fn configure_device(device: &mut input::Device) {
         use input::DeviceCapability;
-        
+
         // Check if it's a touchpad (has pointer + gesture but not a mouse)
-        if device.has_capability(DeviceCapability::Pointer) 
-            && device.has_capability(DeviceCapability::Gesture) 
+        if device.has_capability(DeviceCapability::Pointer)
+            && device.has_capability(DeviceCapability::Gesture)
         {
             // Enable tap-to-click
             if device.config_tap_finger_count() > 0 {
                 if let Err(e) = device.config_tap_set_enabled(true) {
-                    log::warn!("Failed to enable tap-to-click on {}: {:?}", 
-                        device.name(), e);
+                    log::warn!(
+                        "Failed to enable tap-to-click on {}: {:?}",
+                        device.name(),
+                        e
+                    );
                 } else {
                     log::info!("Enabled tap-to-click on: {}", device.name());
                 }
-                
+
                 // Also enable tap-and-drag if available
                 let _ = device.config_tap_set_drag_enabled(true);
             }
@@ -193,11 +182,13 @@ impl InputCapture {
 
     /// Collect available events into a Vec (needed for stateful gesture tracking)
     pub fn events(&mut self) -> Vec<InputEvent> {
-        use input::event::{Event, EventTrait};
+        use input::event::device::DeviceEvent;
+        use input::event::gesture::{
+            GestureEvent, GestureEventCoordinates, GestureEventTrait, GestureSwipeEvent,
+        };
         use input::event::keyboard::KeyboardEventTrait;
         use input::event::pointer::PointerScrollEvent;
-        use input::event::device::DeviceEvent;
-        use input::event::gesture::{GestureEvent, GestureSwipeEvent, GestureEventTrait, GestureEventCoordinates};
+        use input::event::{Event, EventTrait};
         use input::DeviceCapability;
 
         let mut results = Vec::new();
@@ -252,15 +243,17 @@ impl InputCapture {
                         PointerEvent::ScrollFinger(scroll) => {
                             // Accumulate scroll values
                             if scroll.has_axis(Axis::Vertical) {
-                                self.touchpad_scroll.vertical += scroll.scroll_value(Axis::Vertical);
+                                self.touchpad_scroll.vertical +=
+                                    scroll.scroll_value(Axis::Vertical);
                             }
                             if scroll.has_axis(Axis::Horizontal) {
-                                self.touchpad_scroll.horizontal += scroll.scroll_value(Axis::Horizontal);
+                                self.touchpad_scroll.horizontal +=
+                                    scroll.scroll_value(Axis::Horizontal);
                             }
-                            
+
                             // Emit when accumulated scroll crosses threshold
                             const SCROLL_THRESHOLD: f64 = 15.0;
-                            
+
                             if self.touchpad_scroll.vertical.abs() >= SCROLL_THRESHOLD {
                                 let value = self.touchpad_scroll.vertical;
                                 self.touchpad_scroll.vertical = 0.0; // Reset after emitting
@@ -291,7 +284,10 @@ impl InputCapture {
                                     self.swipe_state.total_dx = 0.0;
                                     self.swipe_state.total_dy = 0.0;
                                     self.swipe_state.active = true;
-                                    log::debug!("Swipe begin: {} fingers", self.swipe_state.finger_count);
+                                    log::debug!(
+                                        "Swipe begin: {} fingers",
+                                        self.swipe_state.finger_count
+                                    );
                                 }
                                 GestureSwipeEvent::Update(ref update_event) => {
                                     // Accumulate delta
@@ -306,22 +302,35 @@ impl InputCapture {
                                         const SWIPE_THRESHOLD: f64 = 50.0;
                                         let dx = self.swipe_state.total_dx;
                                         let dy = self.swipe_state.total_dy;
-                                        
-                                        log::debug!("Swipe end: {} fingers, dx={:.1}, dy={:.1}", 
-                                            self.swipe_state.finger_count, dx, dy);
-                                        
-                                        if dy.abs() > SWIPE_THRESHOLD || dx.abs() > SWIPE_THRESHOLD {
+
+                                        log::debug!(
+                                            "Swipe end: {} fingers, dx={:.1}, dy={:.1}",
+                                            self.swipe_state.finger_count,
+                                            dx,
+                                            dy
+                                        );
+
+                                        if dy.abs() > SWIPE_THRESHOLD || dx.abs() > SWIPE_THRESHOLD
+                                        {
                                             let direction = if dy.abs() > dx.abs() {
-                                                if dy < 0.0 { SwipeDirection::Up } else { SwipeDirection::Down }
+                                                if dy < 0.0 {
+                                                    SwipeDirection::Up
+                                                } else {
+                                                    SwipeDirection::Down
+                                                }
                                             } else {
-                                                if dx < 0.0 { SwipeDirection::Left } else { SwipeDirection::Right }
+                                                if dx < 0.0 {
+                                                    SwipeDirection::Left
+                                                } else {
+                                                    SwipeDirection::Right
+                                                }
                                             };
-                                            results.push(InputEvent::Swipe { 
-                                                finger_count: self.swipe_state.finger_count, 
+                                            results.push(InputEvent::Swipe {
+                                                finger_count: self.swipe_state.finger_count,
                                                 direction,
                                             });
                                         }
-                                        
+
                                         self.swipe_state.active = false;
                                     }
                                 }
@@ -329,13 +338,17 @@ impl InputCapture {
                             }
                         }
                         GestureEvent::Hold(hold) => {
-                            use input::event::gesture::{GestureHoldEvent, GestureEndEvent};
+                            use input::event::gesture::{GestureEndEvent, GestureHoldEvent};
                             match hold {
                                 GestureHoldEvent::End(ref end_event) => {
                                     let finger_count = end_event.finger_count();
                                     let cancelled = end_event.cancelled();
-                                    log::debug!("Hold end: {} fingers, cancelled={}", finger_count, cancelled);
-                                    
+                                    log::debug!(
+                                        "Hold end: {} fingers, cancelled={}",
+                                        finger_count,
+                                        cancelled
+                                    );
+
                                     // If not cancelled, it was a clean tap-like gesture
                                     // (user lifted fingers without swiping)
                                     if !cancelled && finger_count >= 3 {
