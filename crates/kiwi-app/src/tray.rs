@@ -1,7 +1,7 @@
 //! System tray icon using StatusNotifierItem (ksni)
 
 use ksni::{menu::StandardItem, Handle, MenuItem, Tray};
-use std::sync::mpsc::{self, Receiver, Sender};
+use crossbeam_channel::Sender;
 
 /// Actions that can be triggered from the tray menu
 #[derive(Debug, Clone)]
@@ -114,11 +114,10 @@ impl Tray for KiwiTray {
 }
 
 /// Create the tray icon and return a handle and receiver for actions
-pub fn create_tray(initial_active: bool) -> (Handle<KiwiTray>, Receiver<TrayAction>) {
-    let (tx, rx) = mpsc::channel();
+pub fn create_tray(initial_active: bool, tx: Sender<TrayAction>) -> Handle<KiwiTray> {
     let tray = KiwiTray::new(initial_active, tx);
     let service = ksni::TrayService::new(tray);
     let handle = service.handle();
     service.spawn();
-    (handle, rx)
+    handle
 }

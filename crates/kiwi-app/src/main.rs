@@ -3,16 +3,19 @@
 mod position_selector;
 mod tray;
 
+use crossbeam_channel::{Receiver as CbReceiver, Sender as CbSender};
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::{window, Length, Subscription};
+use cosmic::iced::Size;
 use cosmic::iced_widget::svg;
 use cosmic::iced_widget::Svg;
+use cosmic::iced_futures::futures::{SinkExt, StreamExt};
 use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::widget::scrollable;
 use kiwi_common::{keystroke_widget, Config, Keystroke, OverlayPosition, PaletteType, APP_ID};
 use position_selector::PositionSelector;
-use std::sync::mpsc;
+use std::any::TypeId;
 
 const SERVICE_NAME: &str = "kiwi-daemon.service";
 
@@ -61,12 +64,26 @@ async fn stop_daemon_async() -> bool {
 fn main() -> cosmic::iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    let (tray_tx, tray_rx) = crossbeam_channel::unbounded::<tray::TrayAction>();
+
     let settings = cosmic::app::Settings::default()
         .size_limits(cosmic::iced::Limits::NONE.min_width(350.0).min_height(400.0))
         .size(cosmic::iced::Size::new(400.0, 550.0))
         .exit_on_close(false); // Don't exit when window closes - tray stays
 
-    cosmic::app::run::<KiwiApp>(settings, ())
+    cosmic::app::run::<KiwiApp>(
+        settings,
+        Flags {
+            tray_tx,
+            tray_rx,
+        },
+    )
+}
+
+#[derive(Clone)]
+struct Flags {
+    tray_tx: CbSender<tray::TrayAction>,
+    tray_rx: CbReceiver<tray::TrayAction>,
 }
 
 struct KiwiApp {
@@ -77,8 +94,8 @@ struct KiwiApp {
     daemon_running: bool,
     pending_save: bool,
     window_visible: bool,
-    /// Channel to receive tray menu actions
-    tray_rx: Option<mpsc::Receiver<tray::TrayAction>>,
+    /// Crossbeam receiver for tray actions (works even if no window is visible)
+    tray_rx: CbReceiver<tray::TrayAction>,
     /// Handle to keep tray alive
     #[allow(dead_code)]
     tray_handle: Option<ksni::Handle<tray::KiwiTray>>,
@@ -88,6 +105,9 @@ struct KiwiApp {
 enum Message {
     // Window actions
     WindowClosed(window::Id),
+    WindowOpened(window::Id),
+    // Tray actions (from subscription)
+    TrayAction(tray::TrayAction),
     // Tray actions (received from tray menu)
     TrayShowSettings,
     TrayToggleActive,
@@ -105,13 +125,11 @@ enum Message {
     SetPosition(OverlayPosition),
     SaveConfig,
     ConfigChanged(Config),
-    // Polling for tray messages
-    CheckTrayMessages,
 }
 
 impl cosmic::Application for KiwiApp {
     type Executor = cosmic::executor::Default;
-    type Flags = ();
+    type Flags = Flags;
     type Message = Message;
 
     const APP_ID: &'static str = "dev.hojjat.kiwi";
@@ -126,7 +144,7 @@ impl cosmic::Application for KiwiApp {
 
     fn init(
         core: cosmic::Core,
-        _flags: Self::Flags,
+        flags: Self::Flags,
     ) -> (Self, Task<cosmic::Action<Self::Message>>) {
         // Load config
         let config_handler = cosmic_config::Config::new(APP_ID, Config::VERSION).ok();
@@ -136,7 +154,7 @@ impl cosmic::Application for KiwiApp {
             .unwrap_or_default();
 
         // Create tray icon
-        let (tray_handle, tray_rx) = tray::create_tray(config.enabled);
+        let tray_handle = tray::create_tray(config.enabled, flags.tray_tx);
 
         let app = Self {
             core,
@@ -145,7 +163,7 @@ impl cosmic::Application for KiwiApp {
             daemon_running: false,
             pending_save: false,
             window_visible: false, // Start hidden
-            tray_rx: Some(tray_rx),
+            tray_rx: flags.tray_rx,
             tray_handle: Some(tray_handle),
         };
 
@@ -186,8 +204,8 @@ impl cosmic::Application for KiwiApp {
                 .map(|update| Message::ConfigChanged(update.config)),
             // Periodically check daemon status
             time::every(Duration::from_secs(5)).map(|_| Message::RefreshDaemonStatus),
-            // Poll for tray messages
-            time::every(Duration::from_millis(100)).map(|_| Message::CheckTrayMessages),
+            // Tray actions (no polling; block on receiver in a background thread)
+            tray_subscription(self.tray_rx.clone()),
         ];
 
         // Debounce timer for config save
@@ -201,25 +219,32 @@ impl cosmic::Application for KiwiApp {
     fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
         match message {
             Message::WindowClosed(id) => {
-                // Minimize window instead of closing - tray stays active
+                // Let the window close, but app keeps running (tray stays active)
                 self.window_visible = false;
-                log::info!("Window close requested, minimizing instead");
-                return cosmic::iced::window::minimize(id, true).map(|_: ()| cosmic::Action::None);
+                self.core_mut().set_main_window_id(None);
+                log::info!("Window closed, app continues in tray");
+                return cosmic::iced::window::close(id);
             }
             Message::TrayShowSettings => {
-                log::info!("TrayShowSettings: Attempting to show window");
+                log::info!("TrayShowSettings: Opening settings window");
                 self.window_visible = true;
-                // Restore from minimize and focus the main window
+                
+                // If window already exists, just focus it
                 if let Some(id) = self.core.main_window_id() {
-                    log::info!("Main window id: {:?}, restoring and focusing", id);
-                    // First restore from minimize, then focus
-                    return cosmic::task::batch([
-                        cosmic::iced::window::minimize(id, false).map(|_: ()| cosmic::Action::None),
-                        cosmic::iced::window::gain_focus(id).map(|_: ()| cosmic::Action::None),
-                    ]);
-                } else {
-                    log::warn!("No main window id available");
+                    log::info!("Window already open ({:?}), focusing", id);
+                    return cosmic::iced::window::gain_focus(id).map(|_: ()| cosmic::Action::None);
                 }
+                
+                // No window exists, open a new one
+                let settings = window::Settings {
+                    size: Size::new(400.0, 550.0),
+                    decorations: false, // libcosmic provides its own header bar
+                    ..Default::default()
+                };
+                let (id, task) = cosmic::iced::window::open(settings);
+                self.core_mut().set_main_window_id(Some(id));
+                log::info!("Opening new window with id: {:?}", id);
+                return task.map(|id| cosmic::Action::App(Message::WindowOpened(id)));
             }
             Message::TrayToggleActive => {
                 let new_active = !(self.daemon_running && self.config.enabled);
@@ -281,6 +306,11 @@ impl cosmic::Application for KiwiApp {
                 }
                 self.update_tray_state();
             }
+            Message::WindowOpened(id) => {
+                log::info!("WindowOpened: {:?}", id);
+                self.core_mut().set_main_window_id(Some(id));
+                return cosmic::iced::window::gain_focus(id).map(|_: ()| cosmic::Action::None);
+            }
             Message::SetKeySize(size) => {
                 self.config.key_size = size;
                 self.pending_save = true;
@@ -316,30 +346,42 @@ impl cosmic::Application for KiwiApp {
                     cosmic::Action::App(Message::DaemonStatusChecked(running))
                 });
             }
-            Message::CheckTrayMessages => {
-                // Check for tray menu actions
-                if let Some(ref rx) = self.tray_rx {
-                    while let Ok(action) = rx.try_recv() {
-                        log::info!("Received tray action: {:?}", action);
-                        match action {
-                            tray::TrayAction::ShowSettings => {
-                                log::info!("Processing ShowSettings");
-                                return self.update(Message::TrayShowSettings);
-                            }
-                            tray::TrayAction::ToggleActive => {
-                                log::info!("Processing ToggleActive");
-                                return self.update(Message::TrayToggleActive);
-                            }
-                            tray::TrayAction::Quit => {
-                                return self.update(Message::TrayQuit);
-                            }
-                        }
-                    }
-                }
-            }
+            Message::TrayAction(action) => match action {
+                tray::TrayAction::ShowSettings => return self.update(Message::TrayShowSettings),
+                tray::TrayAction::ToggleActive => return self.update(Message::TrayToggleActive),
+                tray::TrayAction::Quit => return self.update(Message::TrayQuit),
+            },
         }
         Task::none()
     }
+}
+
+fn tray_subscription(rx: CbReceiver<tray::TrayAction>) -> Subscription<Message> {
+    use cosmic::iced_futures::Subscription;
+
+    struct TraySub;
+
+    Subscription::run_with_id(
+        TypeId::of::<TraySub>(),
+        cosmic::iced::stream::channel(10, move |mut output| async move {
+            // Bridge the blocking crossbeam receiver into an async stream.
+            let (mut tx, mut async_rx) =
+                cosmic::iced_futures::futures::channel::mpsc::channel::<tray::TrayAction>(10);
+
+            std::thread::spawn(move || {
+                for action in rx.iter() {
+                    // Best-effort: if the app is shutting down, ignore.
+                    let _ = tx.try_send(action);
+                }
+            });
+
+            while let Some(action) = async_rx.next().await {
+                if output.send(Message::TrayAction(action)).await.is_err() {
+                    break;
+                }
+            }
+        }),
+    )
 }
 
 impl KiwiApp {
@@ -353,7 +395,9 @@ impl KiwiApp {
 
     fn update_tray_state(&self) {
         if let Some(ref handle) = self.tray_handle {
-            let is_active = self.daemon_running && self.config.enabled;
+            // Make the tray immediately reflect the *requested* state.
+            // (Daemon state can lag slightly behind systemctl start/stop.)
+            let is_active = self.config.enabled;
             handle.update(move |tray| {
                 tray.set_active(is_active);
             });

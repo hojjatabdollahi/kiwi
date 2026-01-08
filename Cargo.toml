@@ -32,6 +32,9 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 # Async
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
 
+# Channels
+crossbeam-channel = "0.5"
+
 # System tray
 ksni = "0.2"
 
