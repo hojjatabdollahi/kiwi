@@ -41,9 +41,12 @@ struct SharedState {
     current_key: Option<String>,
     /// History of completed keystrokes (released) - shown as not pressed
     history: Vec<Keystroke>,
+    /// Track if a non-modifier key was pressed while modifiers were held
+    /// (to know if we should show modifier-only tap on release)
+    key_pressed_with_modifiers: bool,
 }
 
-const MAX_HISTORY: usize = 5;
+const MAX_HISTORY: usize = 10;
 
 /// D-Bus service implementation
 struct KiwiDbus {
@@ -199,6 +202,7 @@ impl cosmic::Application for Kiwi {
             modifiers: KeyModifiers::default(),
             current_key: None,
             history: Vec::new(),
+            key_pressed_with_modifiers: false,
         }));
 
         // Start D-Bus service in background
@@ -261,6 +265,10 @@ impl cosmic::Application for Kiwi {
                                                     // (handled in view by building current keystroke from state)
                                                 } else if let Some(key_str) = key_str {
                                                     // Non-modifier key pressed
+                                                    // Mark that a key was pressed with modifiers
+                                                    if s.modifiers.any() {
+                                                        s.key_pressed_with_modifiers = true;
+                                                    }
                                                     // If there was a previous key being held, release it to history
                                                     if let Some(prev_key) = s.current_key.take() {
                                                         let completed = if s.modifiers.any() {
@@ -276,9 +284,8 @@ impl cosmic::Application for Kiwi {
                                             }
                                             KeyState::Released => {
                                                 if is_modifier {
-                                                    // Before releasing modifier, if we have a current key, 
-                                                    // the combo with this modifier is complete
-                                                    // But we continue holding the key with remaining modifiers
+                                                    // Capture modifiers before this one is released
+                                                    let mods_before = s.modifiers.clone();
                                                     
                                                     // Update modifier state
                                                     match key {
@@ -287,6 +294,20 @@ impl cosmic::Application for Kiwi {
                                                         42 | 54 => s.modifiers.shift = false,
                                                         125 | 126 => s.modifiers.super_key = false,
                                                         _ => {}
+                                                    }
+                                                    
+                                                    // If no key was pressed while modifier was held,
+                                                    // and no other key is currently pressed,
+                                                    // add the modifier tap to history
+                                                    if !s.key_pressed_with_modifiers && s.current_key.is_none() {
+                                                        if let Some(keystroke) = Keystroke::from_modifiers(&mods_before, false) {
+                                                            push_history(&mut s.history, keystroke);
+                                                        }
+                                                    }
+                                                    
+                                                    // Reset tracking when all modifiers are released
+                                                    if !s.modifiers.any() {
+                                                        s.key_pressed_with_modifiers = false;
                                                     }
                                                 } else if key_str.is_some() {
                                                     // Non-modifier key released
@@ -409,11 +430,13 @@ impl cosmic::Application for Kiwi {
                 }
             },
             Message::Tick => {
-                // Check if quit was requested
-                if let Ok(state) = self.state.lock() {
+                if let Ok(mut state) = self.state.lock() {
+                    // Check if quit was requested
                     if state.quit_requested {
                         std::process::exit(0);
                     }
+                    // Clean up expired keystrokes from history
+                    state.history.retain(|k| !k.is_expired());
                 }
             }
         }
