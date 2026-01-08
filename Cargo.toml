@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/kiwi-daemon",
-    "crates/kiwi-applet",
+    "crates/kiwi-app",
     "crates/kiwi-common",
     "crates/kiwi-input",
 ]
@@ -31,6 +31,9 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 # Async
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
+
+# System tray
+ksni = "0.2"
 
 # Input capture
 input = "0.9"

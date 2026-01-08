@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Kiwi
+Comment=Keystroke visualization overlay for screen recordings and presentations
+Type=Application
+Exec=kiwi
+Terminal=false
+Categories=Utility;Accessibility;
+Icon=kiwi
+StartupNotify=true
+Keywords=keystroke;keyboard;visualization;screencast;presentation;
