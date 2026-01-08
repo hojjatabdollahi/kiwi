@@ -12,12 +12,54 @@ pub const DBUS_NAME: &str = "dev.hojjat.Kiwi";
 /// D-Bus object path
 pub const DBUS_PATH: &str = "/dev/hojjat/Kiwi";
 
+/// Color palette preset for keystroke visualization
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PaletteType {
+    #[default]
+    Dark,
+    Light,
+    Frosted,
+}
+
+impl PaletteType {
+    pub const ALL: &'static [PaletteType] = &[
+        PaletteType::Dark,
+        PaletteType::Light,
+        PaletteType::Frosted,
+    ];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            PaletteType::Dark => "Dark",
+            PaletteType::Light => "Light",
+            PaletteType::Frosted => "Frosted Glass",
+        }
+    }
+}
+
 /// User configuration - persisted via cosmic-config
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, CosmicConfigEntry)]
-#[version = 1]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, CosmicConfigEntry)]
+#[version = 4]
 pub struct Config {
     /// Whether keystroke visualization is enabled
     pub enabled: bool,
+    /// Size of keystroke widgets (32-256 pixels)
+    pub key_size: f32,
+    /// How long keystrokes stay visible (in seconds)
+    pub fade_duration: f32,
+    /// Color palette
+    pub palette: PaletteType,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            key_size: 36.0,
+            fade_duration: 5.0,
+            palette: PaletteType::Dark,
+        }
+    }
 }
 
 /// Input event for display (serializable for IPC if needed)

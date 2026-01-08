@@ -2,14 +2,13 @@
 
 use std::time::Instant;
 
-use cosmic::iced::{self, Background, Border, Color, Length};
+use cosmic::iced::{self, Background, Border, Color, Length, gradient};
 use cosmic::iced_widget::container;
 use cosmic::iced_widget::svg::{self, Svg};
 use cosmic::widget::{self, text};
 use cosmic::Element;
+use kiwi_common::PaletteType;
 
-/// Icon size (slightly smaller than key size for padding)
-const ICON_SIZE: f32 = 24.0;
 
 // Embed icons at compile time (path relative to this file: src/ui/keystroke.rs)
 const ICON_RETURN: &[u8] = include_bytes!("../../../../data/icons/kiwi-return-symbolic.svg");
@@ -32,11 +31,102 @@ const ICON_TWO_FINGER_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-tw
 const ICON_TWO_FINGER_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-finger-down-symbolic.svg");
 
 
-/// How long keystrokes stay visible before fully fading
-pub const FADE_DURATION_SECS: f32 = 5.0;
 
 /// Threshold for combining repeated keystrokes (in milliseconds)
 pub const REPEAT_THRESHOLD_MS: u128 = 200;
+
+/// Color palette for keystroke visualization
+#[derive(Debug, Clone, Copy)]
+pub struct Palette {
+    /// Text color (base, before opacity)
+    pub text: Color,
+    /// Background when key is pressed
+    pub bg_pressed: Color,
+    /// Background when key is released (can be gradient start)
+    pub bg_released: Color,
+    /// Optional gradient end color for released state
+    pub bg_gradient_end: Option<Color>,
+    /// Border color
+    pub border: Color,
+    /// Plus sign color
+    pub plus: Color,
+    /// Count badge text color
+    pub count: Color,
+    /// Count badge background color (for the oval)
+    pub count_bg: Color,
+}
+
+impl Palette {
+    /// Dark theme - classic dark with subtle blue pressed state (more transparent)
+    pub fn dark() -> Self {
+        Self {
+            text: Color::from_rgb(1.0, 1.0, 1.0),
+            bg_pressed: Color::from_rgba(0.2, 0.2, 0.5, 0.5),
+            bg_released: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+            bg_gradient_end: None,
+            border: Color::from_rgba(1.0, 1.0, 1.0, 0.25),
+            plus: Color::from_rgba(1.0, 1.0, 1.0, 0.5),
+            count: Color::from_rgba(1.0, 1.0, 1.0, 1.0),
+            count_bg: Color::from_rgba(0.0, 0.0, 0.0, 0.6),
+        }
+    }
+
+    /// Light theme - bright with dark text (more transparent)
+    pub fn light() -> Self {
+        Self {
+            text: Color::from_rgb(0.1, 0.1, 0.15),
+            bg_pressed: Color::from_rgba(0.6, 0.65, 0.85, 0.5),
+            bg_released: Color::from_rgba(0.95, 0.95, 0.97, 0.45),
+            bg_gradient_end: None,
+            border: Color::from_rgba(0.3, 0.3, 0.4, 0.3),
+            plus: Color::from_rgba(0.2, 0.2, 0.3, 0.6),
+            count: Color::from_rgba(0.1, 0.1, 0.15, 1.0),
+            count_bg: Color::from_rgba(1.0, 1.0, 1.0, 0.7),
+        }
+    }
+
+    /// Frosted glass - translucent with blur-like gradient
+    pub fn frosted() -> Self {
+        Self {
+            text: Color::from_rgb(1.0, 1.0, 1.0),
+            bg_pressed: Color::from_rgba(0.4, 0.5, 0.7, 0.7),
+            bg_released: Color::from_rgba(0.3, 0.35, 0.45, 0.5),
+            bg_gradient_end: Some(Color::from_rgba(0.2, 0.25, 0.35, 0.4)),
+            border: Color::from_rgba(1.0, 1.0, 1.0, 0.2),
+            plus: Color::from_rgba(1.0, 1.0, 1.0, 0.6),
+            count: Color::from_rgba(1.0, 1.0, 1.0, 1.0),
+            count_bg: Color::from_rgba(0.1, 0.15, 0.25, 0.7),
+        }
+    }
+
+    /// Get palette from type
+    pub fn from_type(palette_type: PaletteType) -> Self {
+        match palette_type {
+            PaletteType::Dark => Self::dark(),
+            PaletteType::Light => Self::light(),
+            PaletteType::Frosted => Self::frosted(),
+        }
+    }
+
+    /// Apply opacity to all colors
+    pub fn with_opacity(&self, opacity: f32) -> Self {
+        Self {
+            text: color_with_opacity(self.text, opacity),
+            bg_pressed: color_with_opacity(self.bg_pressed, opacity),
+            bg_released: color_with_opacity(self.bg_released, opacity),
+            bg_gradient_end: self.bg_gradient_end.map(|c| color_with_opacity(c, opacity)),
+            border: color_with_opacity(self.border, opacity),
+            plus: color_with_opacity(self.plus, opacity),
+            count: color_with_opacity(self.count, opacity),
+            count_bg: color_with_opacity(self.count_bg, opacity),
+        }
+    }
+}
+
+/// Helper to multiply color's alpha by opacity
+fn color_with_opacity(color: Color, opacity: f32) -> Color {
+    Color::from_rgba(color.r, color.g, color.b, color.a * opacity)
+}
 
 /// Represents a keystroke to display
 #[derive(Debug, Clone)]
@@ -145,27 +235,27 @@ impl Keystroke {
     }
 
     /// Check if this keystroke has expired (older than fade duration)
-    pub fn is_expired(&self) -> bool {
-        self.age_secs() >= FADE_DURATION_SECS
+    pub fn is_expired(&self, fade_duration_secs: f32) -> bool {
+        self.age_secs() >= fade_duration_secs
     }
 
     /// Get opacity based on age (1.0 = new, 0.0 = fully faded)
     /// Stays at 1.0 for the first 70% of duration, then fades in the last 30% with easing
-    pub fn opacity(&self) -> f32 {
+    pub fn opacity(&self, fade_duration_secs: f32) -> f32 {
         if self.pressed {
             1.0  // Pressed keys are always fully visible
         } else {
             let age = self.age_secs();
-            let fade_start = FADE_DURATION_SECS * 0.7;  // Start fading at 70%
+            let fade_start = fade_duration_secs * 0.7;  // Start fading at 70%
             
-            if age >= FADE_DURATION_SECS {
+            if age >= fade_duration_secs {
                 0.0
             } else if age <= fade_start {
                 1.0  // Full opacity for first 70%
             } else {
                 // Fade from 1.0 to 0.0 in the last 30% with ease-out
-                let fade_duration = FADE_DURATION_SECS - fade_start;
-                let t = (age - fade_start) / fade_duration;  // 0.0 -> 1.0
+                let fade_phase = fade_duration_secs - fade_start;
+                let t = (age - fade_start) / fade_phase;  // 0.0 -> 1.0
                 let eased = ease_in_cubic(t);
                 1.0 - eased
             }
@@ -182,11 +272,23 @@ fn ease_in_cubic(t: f32) -> f32 {
 // Style constants
 const BORDER_WIDTH: f32 = 1.0;
 const BORDER_RADIUS: f32 = 6.0;
-const KEY_SIZE: f32 = 36.0;
-const FONT_SIZE: f32 = 20.0;
-const PLUS_FONT_SIZE: f32 = 14.0;
 const PLUS_WIDTH: f32 = 10.0;  // Width for the "+" separator
 const KEY_GAP: f32 = 4.0;
+
+/// Calculate font size based on key size
+fn font_size_for_key(key_size: f32) -> f32 {
+    key_size * 0.55
+}
+
+/// Calculate icon size based on key size
+fn icon_size_for_key(key_size: f32) -> f32 {
+    key_size * 0.65
+}
+
+/// Calculate plus font size based on key size
+fn plus_font_size_for_key(key_size: f32) -> f32 {
+    key_size * 0.4
+}
 
 /// Returns (icon_data, should_apply_color)
 fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
@@ -214,13 +316,16 @@ fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
 }
 
 /// Creates the content element for a key - either an icon or text
-fn key_content<'a, M: 'a>(key: &str, text_color: Color) -> Element<'a, M> {
+fn key_content<'a, M: 'a>(key: &str, text_color: Color, key_size: f32) -> Element<'a, M> {
+    let icon_size = icon_size_for_key(key_size);
+    let font_size = font_size_for_key(key_size);
+    
     if let Some((icon_data, apply_color)) = get_icon_for_key_with_style(key) {
         // Use embedded SVG icon
         let handle = svg::Handle::from_memory(icon_data);
         let mut svg = Svg::new(handle)
-            .width(Length::Fixed(ICON_SIZE))
-            .height(Length::Fixed(ICON_SIZE));
+            .width(Length::Fixed(icon_size))
+            .height(Length::Fixed(icon_size));
         
         if apply_color {
             svg = svg.class(cosmic::theme::Svg::custom(move |_| svg::Style {
@@ -232,7 +337,7 @@ fn key_content<'a, M: 'a>(key: &str, text_color: Color) -> Element<'a, M> {
     } else {
         // Use text
         text::Text::new(key.to_string())
-            .size(FONT_SIZE)
+            .size(font_size)
             .class(cosmic::theme::Text::Color(text_color))
             .align_x(iced::alignment::Horizontal::Center)
             .align_y(iced::alignment::Vertical::Center)
@@ -244,18 +349,32 @@ fn key_content<'a, M: 'a>(key: &str, text_color: Color) -> Element<'a, M> {
 /// 
 /// - Single key: square with border
 /// - Combination: outer container with border, inner key boxes (no border) + "+" separators
-pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
-    let opacity = keystroke.opacity();
+pub fn keystroke_widget<'a, M: 'a>(
+    keystroke: &Keystroke, 
+    key_size: f32, 
+    fade_duration: f32,
+    palette_type: PaletteType,
+) -> Element<'a, M> {
+    let opacity = keystroke.opacity(fade_duration);
+    let plus_font_size = plus_font_size_for_key(key_size);
+    let palette = Palette::from_type(palette_type).with_opacity(opacity);
     
-    let bg = if keystroke.pressed {
-        Color::from_rgba(0.3, 0.3, 0.5, 0.85 * opacity)
+    let background = if keystroke.pressed {
+        Background::Color(palette.bg_pressed)
+    } else if let Some(gradient_end) = palette.bg_gradient_end {
+        // Use gradient for frosted glass effect
+        let grad = gradient::Linear::new(std::f32::consts::PI / 4.0)  // 45 degree angle
+            .add_stop(0.0, palette.bg_released)
+            .add_stop(1.0, gradient_end);
+        Background::Gradient(gradient::Gradient::Linear(grad))
     } else {
-        Color::from_rgba(0.0, 0.0, 0.0, 0.7 * opacity)
+        Background::Color(palette.bg_released)
     };
     
-    let border_color = Color::from_rgba(1.0, 1.0, 1.0, 0.3 * opacity);
-    let text_color = Color::from_rgba(1.0, 1.0, 1.0, opacity);
-    let plus_color = Color::from_rgba(1.0, 1.0, 1.0, 0.5 * opacity);
+    let border_color = palette.border;
+    let text_color = palette.text;
+    let plus_color = palette.plus;
+    let count_color = palette.count;
 
     if keystroke.is_combination() {
         // Combination: outer border, inner key boxes without borders
@@ -267,23 +386,23 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
                 row_children.push(
                     widget::container(
                         text::Text::new("+")
-                            .size(PLUS_FONT_SIZE)
+                            .size(plus_font_size)
                             .class(cosmic::theme::Text::Color(plus_color))
                             .align_x(iced::alignment::Horizontal::Center)
                             .align_y(iced::alignment::Vertical::Center),
                     )
                     .width(Length::Fixed(PLUS_WIDTH))
-                    .height(Length::Fixed(KEY_SIZE))
+                    .height(Length::Fixed(key_size))
                     .align_x(iced::alignment::Horizontal::Center)
                     .align_y(iced::alignment::Vertical::Center)
                     .into(),
                 );
             }
-            // Key box: KEY_SIZE square, no border, centered content (text or icon)
+            // Key box: key_size square, no border, centered content (text or icon)
             row_children.push(
-                widget::container(key_content(key, text_color))
-                    .width(Length::Fixed(KEY_SIZE))
-                    .height(Length::Fixed(KEY_SIZE))
+                widget::container(key_content(key, text_color, key_size))
+                    .width(Length::Fixed(key_size))
+                    .height(Length::Fixed(key_size))
                     .align_x(iced::alignment::Horizontal::Center)
                     .align_y(iced::alignment::Vertical::Center)
                     .into(),
@@ -296,11 +415,11 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
                 .spacing(0)
                 .align_y(iced::Alignment::Center),
         )
-        .height(Length::Fixed(KEY_SIZE))
+        .height(Length::Fixed(key_size))
         .align_x(iced::alignment::Horizontal::Center)
         .align_y(iced::alignment::Vertical::Center)
         .class(cosmic::theme::Container::custom(move |_| container::Style {
-            background: Some(Background::Color(bg)),
+            background: Some(background),
             border: Border {
                 color: border_color,
                 width: BORDER_WIDTH,
@@ -311,30 +430,42 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
 
         // Add count badge if repeated
         if keystroke.count > 1 {
-            let count_color = Color::from_rgba(1.0, 1.0, 1.0, 0.7 * opacity);
+            let count_font_size = key_size * 0.3;
+            let count_bg = palette.count_bg;
+            let badge = widget::container(
+                text::Text::new(format!("x{}", keystroke.count))
+                    .size(count_font_size)
+                    .class(cosmic::theme::Text::Color(count_color))
+                    .align_x(iced::alignment::Horizontal::Center),
+            )
+            .padding([2, 6])  // vertical, horizontal padding
+            .class(cosmic::theme::Container::custom(move |_| container::Style {
+                background: Some(Background::Color(count_bg)),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: (count_font_size * 0.6).into(),  // pill/oval shape
+                },
+                ..Default::default()
+            }));
             widget::column()
                 .push(combo_widget)
-                .push(
-                    text::Text::new(format!("x{}", keystroke.count))
-                        .size(10.0)
-                        .class(cosmic::theme::Text::Color(count_color))
-                        .align_x(iced::alignment::Horizontal::Center),
-                )
+                .push(badge)
                 .align_x(iced::Alignment::Center)
-                .spacing(2)
+                .spacing((key_size * 0.05) as u16)
                 .into()
         } else {
             combo_widget.into()
         }
     } else {
         // Single key: square with border
-        let key_widget = widget::container(key_content(&keystroke.keys[0], text_color))
-            .width(Length::Fixed(KEY_SIZE))
-            .height(Length::Fixed(KEY_SIZE))
+        let key_widget = widget::container(key_content(&keystroke.keys[0], text_color, key_size))
+            .width(Length::Fixed(key_size))
+            .height(Length::Fixed(key_size))
             .align_x(iced::alignment::Horizontal::Center)
             .align_y(iced::alignment::Vertical::Center)
             .class(cosmic::theme::Container::custom(move |_| container::Style {
-                background: Some(Background::Color(bg)),
+                background: Some(background),
                 border: Border {
                     color: border_color,
                     width: BORDER_WIDTH,
@@ -345,17 +476,29 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
 
         // Add count badge if repeated
         if keystroke.count > 1 {
-            let count_color = Color::from_rgba(1.0, 1.0, 1.0, 0.7 * opacity);
+            let count_font_size = key_size * 0.3;
+            let count_bg = palette.count_bg;
+            let badge = widget::container(
+                text::Text::new(format!("x{}", keystroke.count))
+                    .size(count_font_size)
+                    .class(cosmic::theme::Text::Color(count_color))
+                    .align_x(iced::alignment::Horizontal::Center),
+            )
+            .padding([2, 6])  // vertical, horizontal padding
+            .class(cosmic::theme::Container::custom(move |_| container::Style {
+                background: Some(Background::Color(count_bg)),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: (count_font_size * 0.6).into(),  // pill/oval shape
+                },
+                ..Default::default()
+            }));
             widget::column()
                 .push(key_widget)
-                .push(
-                    text::Text::new(format!("x{}", keystroke.count))
-                        .size(10.0)
-                        .class(cosmic::theme::Text::Color(count_color))
-                        .align_x(iced::alignment::Horizontal::Center),
-                )
+                .push(badge)
                 .align_x(iced::Alignment::Center)
-                .spacing(2)
+                .spacing((key_size * 0.05) as u16)
                 .into()
         } else {
             key_widget.into()
@@ -364,36 +507,41 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
 }
 
 // Available width for keystrokes (window width minus padding)
-const AVAILABLE_WIDTH: f32 = 400.0 - 20.0; // 400px window - 2*10px padding
+const AVAILABLE_WIDTH: f32 = 800.0 - 40.0; // 800px window - margins
 
 impl Keystroke {
     /// Estimate the width of this keystroke widget
-    fn estimated_width(&self) -> f32 {
+    fn estimated_width(&self, key_size: f32) -> f32 {
         if self.is_combination() {
-            // Combination: n keys (each KEY_SIZE) + (n-1) plus separators (each PLUS_WIDTH)
+            // Combination: n keys (each key_size) + (n-1) plus separators (each PLUS_WIDTH)
             let n = self.keys.len() as f32;
-            n * KEY_SIZE + (n - 1.0) * PLUS_WIDTH
+            n * key_size + (n - 1.0) * PLUS_WIDTH
         } else {
             // Single key: fixed square size
-            KEY_SIZE
+            key_size
         }
     }
 }
 
 /// Renders a row of keystrokes, right-aligned with newest on the right.
 /// Filters out expired keystrokes and only includes ones that fit in available width.
-pub fn keystrokes_row<'a, M: 'a + Clone>(keystrokes: &[Keystroke]) -> Element<'a, M> {
+pub fn keystrokes_row<'a, M: 'a + Clone>(
+    keystrokes: &[Keystroke], 
+    key_size: f32, 
+    fade_duration: f32,
+    palette_type: PaletteType,
+) -> Element<'a, M> {
     let mut total_width: f32 = 0.0;
     let mut fitting_keystrokes: Vec<&Keystroke> = Vec::new();
 
     // Process from newest to oldest, skip expired, accumulate width
     for keystroke in keystrokes.iter().rev() {
         // Skip expired keystrokes
-        if keystroke.is_expired() {
+        if keystroke.is_expired(fade_duration) {
             continue;
         }
 
-        let width = keystroke.estimated_width();
+        let width = keystroke.estimated_width(key_size);
         let gap = if fitting_keystrokes.is_empty() { 0.0 } else { KEY_GAP };
         
         if total_width + gap + width <= AVAILABLE_WIDTH {
@@ -409,15 +557,16 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(keystrokes: &[Keystroke]) -> Element<'a
 
     let children: Vec<Element<'a, M>> = fitting_keystrokes
         .into_iter()
-        .map(|k| keystroke_widget(k))
+        .map(|k| keystroke_widget(k, key_size, fade_duration, palette_type))
         .collect();
 
     widget::container(
         widget::row::with_children(children)
             .spacing(KEY_GAP)
-            .align_y(iced::Alignment::Center)
+            .align_y(iced::Alignment::Start)  // Align to top
     )
     .width(Length::Fill)
     .align_x(iced::alignment::Horizontal::Right)
+    .align_y(iced::alignment::Vertical::Top)
     .into()
 }

@@ -7,9 +7,12 @@ use cosmic::iced::{window::Id, Limits, Subscription};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::prelude::*;
 use cosmic::widget;
-use kiwi_common::{Config, APP_ID};
+use kiwi_common::{Config, PaletteType, APP_ID};
 
 const SERVICE_NAME: &str = "kiwi-daemon.service";
+
+/// Static palette names for dropdown (must match PaletteType::ALL order)
+const PALETTE_NAMES: &[&str] = &["Dark", "Light", "Frosted Glass"];
 
 /// Check if the daemon service is running
 fn is_daemon_running() -> bool {
@@ -50,6 +53,8 @@ struct KiwiApplet {
     #[allow(dead_code)]
     config_handler: Option<cosmic_config::Config>,
     daemon_running: bool,
+    /// Pending config save (for debouncing slider)
+    pending_save: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +63,10 @@ enum Message {
     PopupClosed(Id),
     ToggleEnabled(bool),
     ToggleDaemon(bool),
+    SetKeySize(f32),
+    SetFadeDuration(f32),
+    SetPaletteIndex(usize),
+    SaveConfig,
     ConfigChanged(Config),
     RefreshDaemonStatus,
 }
@@ -97,6 +106,7 @@ impl cosmic::Application for KiwiApplet {
             config,
             config_handler,
             daemon_running,
+            pending_save: false,
         };
         (app, Task::none())
     }
@@ -121,6 +131,11 @@ impl cosmic::Application for KiwiApplet {
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
+        // Find current selection index
+        let current_index = PaletteType::ALL
+            .iter()
+            .position(|p| *p == self.config.palette);
+
         let content_list = widget::list_column()
             .padding(5)
             .spacing(0)
@@ -131,6 +146,20 @@ impl cosmic::Application for KiwiApplet {
             .add(widget::settings::item(
                 "Show Keys",
                 widget::toggler(self.config.enabled).on_toggle(Message::ToggleEnabled),
+            ))
+            .add(widget::settings::item(
+                format!("Size: {:.0}", self.config.key_size),
+                widget::slider(32.0..=256.0, self.config.key_size, Message::SetKeySize)
+                    .width(cosmic::iced::Length::Fixed(120.0)),
+            ))
+            .add(widget::settings::item(
+                format!("Fade: {:.1}s", self.config.fade_duration),
+                widget::slider(1.0..=10.0, self.config.fade_duration, Message::SetFadeDuration)
+                    .width(cosmic::iced::Length::Fixed(120.0)),
+            ))
+            .add(widget::settings::item(
+                "Theme",
+                widget::dropdown(PALETTE_NAMES, current_index, Message::SetPaletteIndex),
             ));
 
         self.core.applet.popup_container(content_list).into()
@@ -140,14 +169,21 @@ impl cosmic::Application for KiwiApplet {
         use cosmic::iced::time;
         use std::time::Duration;
 
-        Subscription::batch([
+        let mut subs = vec![
             // Watch for config changes from other processes
             self.core()
                 .watch_config::<Config>(APP_ID)
                 .map(|update| Message::ConfigChanged(update.config)),
             // Periodically check daemon status
             time::every(Duration::from_secs(5)).map(|_| Message::RefreshDaemonStatus),
-        ])
+        ];
+
+        // Debounce timer for saving config
+        if self.pending_save {
+            subs.push(time::every(Duration::from_millis(300)).map(|_| Message::SaveConfig));
+        }
+
+        Subscription::batch(subs)
     }
 
     fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
@@ -181,14 +217,26 @@ impl cosmic::Application for KiwiApplet {
             Message::ToggleEnabled(enabled) => {
                 self.config.enabled = enabled;
                 log::info!("Keystrokes enabled: {}", enabled);
-                
-                // Save config
-                if let Some(ref handler) = self.config_handler {
-                    if let Err(e) = self.config.write_entry(handler) {
-                        log::error!("Failed to save config: {}", e);
-                    } else {
-                        log::info!("Config saved: enabled={}", enabled);
-                    }
+                self.save_config();
+            }
+            Message::SetKeySize(size) => {
+                self.config.key_size = size;
+                self.pending_save = true;  // Debounce - don't save immediately
+            }
+            Message::SetFadeDuration(duration) => {
+                self.config.fade_duration = duration;
+                self.pending_save = true;  // Debounce - don't save immediately
+            }
+            Message::SetPaletteIndex(index) => {
+                if let Some(palette) = PaletteType::ALL.get(index) {
+                    self.config.palette = *palette;
+                    self.save_config();  // Save immediately for dropdown
+                }
+            }
+            Message::SaveConfig => {
+                if self.pending_save {
+                    self.pending_save = false;
+                    self.save_config();
                 }
             }
             Message::ConfigChanged(config) => {
@@ -223,5 +271,15 @@ impl cosmic::Application for KiwiApplet {
 
     fn style(&self) -> Option<cosmic::iced_runtime::Appearance> {
         Some(cosmic::applet::style())
+    }
+}
+
+impl KiwiApplet {
+    fn save_config(&self) {
+        if let Some(ref handler) = self.config_handler {
+            if let Err(e) = self.config.write_entry(handler) {
+                log::error!("Failed to save config: {}", e);
+            }
+        }
     }
 }

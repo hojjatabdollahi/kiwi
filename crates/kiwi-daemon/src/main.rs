@@ -17,7 +17,8 @@ use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_lay
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use wayland_client::protocol::wl_output::WlOutput;
 
-use kiwi_common::{DBUS_NAME, DBUS_PATH};
+use cosmic::cosmic_config::{self, CosmicConfigEntry};
+use kiwi_common::{Config, DBUS_NAME, DBUS_PATH, APP_ID};
 use kiwi_input::{InputCapture, InputEvent, KeyState};
 use ui::{KeyModifiers, Keystroke};
 
@@ -31,10 +32,16 @@ fn main() -> cosmic::iced::Result {
 }
 
 /// Shared state between D-Bus service and app
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct SharedState {
     enabled: bool,
     quit_requested: bool,
+    /// Size of keystroke widgets
+    key_size: f32,
+    /// How long keystrokes stay visible (seconds)
+    fade_duration: f32,
+    /// Color palette
+    palette: kiwi_common::PaletteType,
     /// Current modifier state (live)
     modifiers: KeyModifiers,
     /// Currently pressed non-modifier key and the modifiers that were active when it was pressed
@@ -44,6 +51,22 @@ struct SharedState {
     /// Track if a non-modifier key was pressed while modifiers were held
     /// (to know if we should show modifier-only tap on release)
     key_pressed_with_modifiers: bool,
+}
+
+impl Default for SharedState {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quit_requested: false,
+            key_size: 36.0,
+            fade_duration: 5.0,
+            palette: kiwi_common::PaletteType::default(),
+            modifiers: KeyModifiers::default(),
+            current_key: None,
+            history: Vec::new(),
+            key_pressed_with_modifiers: false,
+        }
+    }
 }
 
 const MAX_HISTORY: usize = 10;
@@ -92,12 +115,28 @@ struct Kiwi {
 enum Message {
     OutputEvent(OutputEvent, WlOutput),
     Tick,
+    ConfigChanged(Config),
+}
+
+/// Calculate window height based on key size (key + count badge + padding)
+fn window_height_for_key_size(key_size: f32) -> u32 {
+    // key_size + spacing (5%) + count text (30%) + some padding
+    let count_height = key_size * 0.35;  // font size + line height
+    let spacing = key_size * 0.05;
+    let padding = 10.0;
+    (key_size + spacing + count_height + padding).max(60.0) as u32
 }
 
 fn create_layer_surface_for_output(
     output: &WlOutput,
     id: window::Id,
+    key_size: f32,
 ) -> cosmic::iced::Task<cosmic::Action<Message>> {
+    // Width: None means stretch to anchor edges, or use a large fixed width
+    // We anchor to RIGHT so we need a fixed width
+    let width = 800u32.max(300);  // Reasonable width for keystrokes
+    let height = window_height_for_key_size(key_size);
+    
     get_layer_surface(SctkLayerSurfaceSettings {
         id,
         layer: Layer::Overlay,
@@ -107,7 +146,7 @@ fn create_layer_surface_for_output(
         anchor: Anchor::TOP | Anchor::RIGHT,
         output: IcedOutput::Output(output.clone()),
         namespace: "kiwi".to_string(),
-        size: Some((Some(400), Some(80))),
+        size: Some((Some(width), Some(height))),
         margin: cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin {
             top: 20,
             right: 20,
@@ -115,7 +154,7 @@ fn create_layer_surface_for_output(
             left: 0,
         },
         exclusive_zone: -1,
-        size_limits: Limits::NONE.min_width(1.0).min_height(1.0),
+        size_limits: Limits::NONE.min_width(300.0).min_height(1.0),
         ..Default::default()
     })
 }
@@ -208,9 +247,18 @@ impl cosmic::Application for Kiwi {
         core: Core,
         _flags: Self::Flags,
     ) -> (Self, cosmic::iced::Task<cosmic::Action<Self::Message>>) {
+        // Load config from cosmic-config
+        let config = cosmic_config::Config::new(APP_ID, Config::VERSION)
+            .ok()
+            .and_then(|h| Config::get_entry(&h).ok())
+            .unwrap_or_default();
+
         let state = Arc::new(Mutex::new(SharedState {
-            enabled: true,
+            enabled: config.enabled,
             quit_requested: false,
+            key_size: config.key_size,
+            fade_duration: config.fade_duration,
+            palette: config.palette,
             modifiers: KeyModifiers::default(),
             current_key: None,
             history: Vec::new(),
@@ -441,11 +489,11 @@ impl cosmic::Application for Kiwi {
 
     fn view_window(&self, id: window::Id) -> cosmic::Element<'_, Self::Message> {
         if self.outputs.iter().any(|o| o.surface_id == id) {
-            let keystrokes = self.state
+            let (keystrokes, key_size, fade_duration, palette) = self.state
                 .lock()
                 .map(|s| {
                     if !s.enabled {
-                        return Vec::new();
+                        return (Vec::new(), s.key_size, s.fade_duration, s.palette);
                     }
 
                     let mut display: Vec<Keystroke> = s.history.clone();
@@ -466,9 +514,9 @@ impl cosmic::Application for Kiwi {
                         }
                     }
 
-                    display
+                    (display, s.key_size, s.fade_duration, s.palette)
                 })
-                .unwrap_or_default();
+                .unwrap_or((Vec::new(), 36.0, 5.0, kiwi_common::PaletteType::default()));
             
             if keystrokes.is_empty() {
                 // Empty transparent container when no keystrokes
@@ -477,7 +525,7 @@ impl cosmic::Application for Kiwi {
             } else {
                 // Show keystrokes row with clipping (spacer inside pushes to right)
                 // Width::Fill needed for spacer to expand, but row items keep natural size
-                ui::keystrokes_row(&keystrokes)
+                ui::keystrokes_row(&keystrokes, key_size, fade_duration, palette)
             }
         } else {
             cosmic::widget::text("").into()
@@ -491,6 +539,8 @@ impl cosmic::Application for Kiwi {
                     let name = info_opt.and_then(|i| i.name);
                     log::info!("Output created: {:?}", name);
                     
+                    let key_size = self.state.lock().map(|s| s.key_size).unwrap_or(36.0);
+                    
                     let surface_id = window::Id::unique();
                     self.outputs.push(OutputState {
                         output: wl_output.clone(),
@@ -498,7 +548,7 @@ impl cosmic::Application for Kiwi {
                         name,
                     });
                     
-                    return create_layer_surface_for_output(&wl_output, surface_id);
+                    return create_layer_surface_for_output(&wl_output, surface_id, key_size);
                 }
                 OutputEvent::Removed => {
                     if let Some(idx) = self.outputs.iter().position(|o| o.output == wl_output) {
@@ -520,7 +570,43 @@ impl cosmic::Application for Kiwi {
                         std::process::exit(0);
                     }
                     // Clean up expired keystrokes from history
-                    state.history.retain(|k| !k.is_expired());
+                    let fade_duration = state.fade_duration;
+                    state.history.retain(|k| !k.is_expired(fade_duration));
+                }
+            }
+            Message::ConfigChanged(config) => {
+                let old_key_size = self.state.lock().map(|s| s.key_size).unwrap_or(36.0);
+                let size_changed = (old_key_size - config.key_size).abs() > 0.1;
+                
+                if let Ok(mut state) = self.state.lock() {
+                    log::info!("Config changed: enabled={}, key_size={}, fade_duration={}, palette={:?}", 
+                        config.enabled, config.key_size, config.fade_duration, config.palette);
+                    state.enabled = config.enabled;
+                    state.key_size = config.key_size;
+                    state.fade_duration = config.fade_duration;
+                    state.palette = config.palette;
+                }
+                
+                // Recreate layer surfaces if size changed
+                if size_changed {
+                    let mut tasks = Vec::new();
+                    
+                    // Destroy old surfaces and create new ones with new size
+                    for output_state in &mut self.outputs {
+                        // Destroy old surface
+                        tasks.push(destroy_layer_surface(output_state.surface_id));
+                        
+                        // Create new surface with new ID
+                        let new_id = window::Id::unique();
+                        output_state.surface_id = new_id;
+                        tasks.push(create_layer_surface_for_output(
+                            &output_state.output,
+                            new_id,
+                            config.key_size,
+                        ));
+                    }
+                    
+                    return cosmic::iced::Task::batch(tasks);
                 }
             }
         }
@@ -546,6 +632,10 @@ impl cosmic::Application for Kiwi {
             }),
             // Periodic tick to update display and check quit
             time::every(std::time::Duration::from_millis(50)).map(|_| Message::Tick),
+            // Watch for config changes
+            self.core()
+                .watch_config::<Config>(APP_ID)
+                .map(|update| Message::ConfigChanged(update.config)),
         ])
     }
 }
