@@ -4,8 +4,24 @@ use std::time::Instant;
 
 use cosmic::iced::{self, Background, Border, Color, Length};
 use cosmic::iced_widget::container;
+use cosmic::iced_widget::svg::{self, Svg};
 use cosmic::widget::{self, text};
 use cosmic::Element;
+
+/// Icon size (slightly smaller than key size for padding)
+const ICON_SIZE: f32 = 24.0;
+
+// Embed icons at compile time (path relative to this file: src/ui/keystroke.rs)
+const ICON_RETURN: &[u8] = include_bytes!("../../../../data/icons/kiwi-return-symbolic.svg");
+const ICON_BACKSPACE: &[u8] = include_bytes!("../../../../data/icons/kiwi-backspace-symbolic.svg");
+const ICON_SHIFT: &[u8] = include_bytes!("../../../../data/icons/kiwi-shift-symbolic.svg");
+const ICON_CTRL: &[u8] = include_bytes!("../../../../data/icons/kiwi-control-symbolic.svg");
+const ICON_TAB: &[u8] = include_bytes!("../../../../data/icons/kiwi-tab-symbolic.svg");
+const ICON_SPACE: &[u8] = include_bytes!("../../../../data/icons/kiwi-space-symbolic.svg");
+const ICON_CAPS: &[u8] = include_bytes!("../../../../data/icons/kiwi-capslock-symbolic.svg");
+const ICON_SUPER: &[u8] = include_bytes!("../../../../data/icons/kiwi-super-symbolic.svg");
+const ICON_ESCAPE: &[u8] = include_bytes!("../../../../data/icons/kiwi-escape-symbolic.svg");
+
 
 /// How long keystrokes stay visible before fully fading
 pub const FADE_DURATION_SECS: f32 = 5.0;
@@ -135,11 +151,54 @@ fn ease_in_cubic(t: f32) -> f32 {
 // Style constants
 const BORDER_WIDTH: f32 = 1.0;
 const BORDER_RADIUS: f32 = 6.0;
-const KEY_SIZE: f32 = 48.0;
+const KEY_SIZE: f32 = 36.0;
 const FONT_SIZE: f32 = 20.0;
 const PLUS_FONT_SIZE: f32 = 14.0;
-const PLUS_WIDTH: f32 = 16.0;  // Width for the "+" separator
-const KEY_GAP: f32 = 8.0;
+const PLUS_WIDTH: f32 = 10.0;  // Width for the "+" separator
+const KEY_GAP: f32 = 4.0;
+
+/// Returns (icon_data, should_apply_color)
+fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
+    match key {
+        "↵" => Some((ICON_RETURN, true)),
+        "⌫" => Some((ICON_BACKSPACE, true)),
+        "⇧" => Some((ICON_SHIFT, true)),
+        "Ctrl" => Some((ICON_CTRL, true)),
+        "Tab" => Some((ICON_TAB, true)),
+        "␣" => Some((ICON_SPACE, true)),
+        "Caps" => Some((ICON_CAPS, true)),
+        "Super" => Some((ICON_SUPER, false)), // Keep original colors
+        "Esc" => Some((ICON_ESCAPE, true)),
+        _ => None,
+    }
+}
+
+/// Creates the content element for a key - either an icon or text
+fn key_content<'a, M: 'a>(key: &str, text_color: Color) -> Element<'a, M> {
+    if let Some((icon_data, apply_color)) = get_icon_for_key_with_style(key) {
+        // Use embedded SVG icon
+        let handle = svg::Handle::from_memory(icon_data);
+        let mut svg = Svg::new(handle)
+            .width(Length::Fixed(ICON_SIZE))
+            .height(Length::Fixed(ICON_SIZE));
+        
+        if apply_color {
+            svg = svg.class(cosmic::theme::Svg::custom(move |_| svg::Style {
+                color: Some(text_color),
+            }));
+        }
+        
+        svg.into()
+    } else {
+        // Use text
+        text::Text::new(key.to_string())
+            .size(FONT_SIZE)
+            .class(cosmic::theme::Text::Color(text_color))
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center)
+            .into()
+    }
+}
 
 /// Renders a keystroke widget with opacity based on age
 /// 
@@ -180,20 +239,14 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
                     .into(),
                 );
             }
-            // Key box: KEY_SIZE square, no border, centered text
+            // Key box: KEY_SIZE square, no border, centered content (text or icon)
             row_children.push(
-                widget::container(
-                    text::Text::new(key.clone())
-                        .size(FONT_SIZE)
-                        .class(cosmic::theme::Text::Color(text_color))
-                        .align_x(iced::alignment::Horizontal::Center)
-                        .align_y(iced::alignment::Vertical::Center),
-                )
-                .width(Length::Fixed(KEY_SIZE))
-                .height(Length::Fixed(KEY_SIZE))
-                .align_x(iced::alignment::Horizontal::Center)
-                .align_y(iced::alignment::Vertical::Center)
-                .into(),
+                widget::container(key_content(key, text_color))
+                    .width(Length::Fixed(KEY_SIZE))
+                    .height(Length::Fixed(KEY_SIZE))
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .align_y(iced::alignment::Vertical::Center)
+                    .into(),
             );
         }
 
@@ -218,27 +271,21 @@ pub fn keystroke_widget<'a, M: 'a>(keystroke: &Keystroke) -> Element<'a, M> {
         .into()
     } else {
         // Single key: square with border
-        widget::container(
-            text::Text::new(keystroke.keys[0].clone())
-                .size(FONT_SIZE)
-                .class(cosmic::theme::Text::Color(text_color))
-                .align_x(iced::alignment::Horizontal::Center)
-                .align_y(iced::alignment::Vertical::Center),
-        )
-        .width(Length::Fixed(KEY_SIZE))
-        .height(Length::Fixed(KEY_SIZE))
-        .align_x(iced::alignment::Horizontal::Center)
-        .align_y(iced::alignment::Vertical::Center)
-        .class(cosmic::theme::Container::custom(move |_| container::Style {
-            background: Some(Background::Color(bg)),
-            border: Border {
-                color: border_color,
-                width: BORDER_WIDTH,
-                radius: BORDER_RADIUS.into(),
-            },
-            ..Default::default()
-        }))
-        .into()
+        widget::container(key_content(&keystroke.keys[0], text_color))
+            .width(Length::Fixed(KEY_SIZE))
+            .height(Length::Fixed(KEY_SIZE))
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center)
+            .class(cosmic::theme::Container::custom(move |_| container::Style {
+                background: Some(Background::Color(bg)),
+                border: Border {
+                    color: border_color,
+                    width: BORDER_WIDTH,
+                    radius: BORDER_RADIUS.into(),
+                },
+                ..Default::default()
+            }))
+            .into()
     }
 }
 
