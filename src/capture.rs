@@ -14,6 +14,7 @@ pub use input::event::pointer::{Axis, ButtonState};
 
 /// Errors that can occur during input capture
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum CaptureError {
     /// Permission denied (not in input group)
     PermissionDenied,
@@ -65,6 +66,7 @@ pub enum SwipeDirection {
 
 /// Input event types we care about
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum InputEvent {
     /// Key press or release
     Key { key: u32, state: KeyState },
@@ -169,6 +171,7 @@ impl InputCapture {
     }
 
     /// Get the file descriptor for polling
+    #[allow(dead_code)]
     pub fn as_fd(&self) -> impl AsFd + '_ {
         &self.libinput
     }

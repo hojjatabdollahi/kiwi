@@ -7,7 +7,7 @@ use cosmic::iced_core::{
     Background, Border, Element, Length,
 };
 
-use kiwi_common::OverlayPosition;
+use crate::config::OverlayPosition;
 
 /// Widget for selecting overlay position
 ///

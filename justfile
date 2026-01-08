@@ -10,17 +10,11 @@ base-dir := absolute_path(clean(rootdir / prefix))
 
 export INSTALL_DIR := base-dir / 'share'
 
-daemon-src := 'target' / 'release' / 'kiwi-daemon'
-daemon-dst := base-dir / 'bin' / 'kiwi-daemon'
-
 app-src := 'target' / 'release' / 'kiwi'
 app-dst := base-dir / 'bin' / 'kiwi'
 
 desktop-src := 'data' / 'dev.hojjat.kiwi.desktop'
 desktop-dst := base-dir / 'share' / 'applications' / 'dev.hojjat.kiwi.desktop'
-
-service-src := 'data' / 'kiwi-daemon.service'
-service-dst := base-dir / 'lib' / 'systemd' / 'user' / 'kiwi-daemon.service'
 
 icon-dir := base-dir / 'share' / 'icons' / 'hicolor'
 icon-src-dir := 'data' / 'icons'
@@ -43,20 +37,14 @@ check *args:
 clean:
     cargo clean
 
-# Runs daemon with debug profile
-run-daemon *args:
-    cargo run -p kiwi-daemon {{args}}
-
 # Runs app with debug profile
-run-app *args:
-    cargo run -p kiwi-app {{args}}
+run *args:
+    cargo run {{args}}
 
 # Install files
 install:
-    install -Dm0755 {{daemon-src}} {{daemon-dst}}
     install -Dm0755 {{app-src}} {{app-dst}}
     install -Dm0644 {{desktop-src}} {{desktop-dst}}
-    install -Dm0644 {{service-src}} {{service-dst}}
     # Install PNG icons at various sizes for tray icon
     install -Dm0644 {{icon-src-dir}}/kiwi-on-16.png {{icon-dir}}/16x16/apps/kiwi-on.png
     install -Dm0644 {{icon-src-dir}}/kiwi-off-16.png {{icon-dir}}/16x16/apps/kiwi-off.png
@@ -79,10 +67,8 @@ install:
 
 # Uninstall files
 uninstall:
-    rm -f {{daemon-dst}}
     rm -f {{app-dst}}
     rm -f {{desktop-dst}}
-    rm -f {{service-dst}}
     # Remove icons
     rm -f {{icon-dir}}/16x16/apps/kiwi-on.png {{icon-dir}}/16x16/apps/kiwi-off.png
     rm -f {{icon-dir}}/22x22/apps/kiwi-on.png {{icon-dir}}/22x22/apps/kiwi-off.png

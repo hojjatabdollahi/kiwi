@@ -2912,54 +2912,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
-name = "kiwi-app"
-version = "0.1.0"
-dependencies = [
- "crossbeam-channel",
- "env_logger",
- "kiwi-common",
- "ksni",
- "libcosmic",
- "log",
- "tokio",
- "zbus 5.12.0",
-]
-
-[[package]]
-name = "kiwi-common"
-version = "0.1.0"
-dependencies = [
- "cosmic-config",
- "libcosmic",
- "log",
- "serde",
- "zbus 5.12.0",
-]
-
-[[package]]
-name = "kiwi-daemon"
+name = "kiwi"
 version = "0.1.0"
 dependencies = [
  "cosmic-client-toolkit 0.1.0 (git+https://github.com/pop-os/cosmic-protocols?branch=main)",
+ "cosmic-config",
+ "crossbeam-channel",
  "env_logger",
- "kiwi-common",
- "kiwi-input",
+ "image",
+ "input",
+ "ksni",
+ "libc",
  "libcosmic",
  "log",
- "tokio",
- "wayland-client",
- "zbus 5.12.0",
-]
-
-[[package]]
-name = "kiwi-input"
-version = "0.1.0"
-dependencies = [
- "input",
- "kiwi-common",
- "libc",
- "log",
+ "serde",
  "udev",
+ "wayland-client",
 ]
 
 [[package]]

@@ -1,48 +1,49 @@
-[workspace]
-resolver = "2"
-members = [
-    "crates/kiwi-daemon",
-    "crates/kiwi-app",
-    "crates/kiwi-common",
-    "crates/kiwi-input",
-]
-
-[workspace.package]
+[package]
+name = "kiwi"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
+description = "Kiwi keystroke visualizer for COSMIC DE"
 
-[workspace.dependencies]
-# COSMIC/iced
-libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", branch = "main" }
-cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
-wayland-client = "0.31"
+[[bin]]
+name = "kiwi"
+path = "src/main.rs"
 
+[dependencies]
 # Logging
 env_logger = "0.11"
 log = "0.4"
 
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-
-# IPC
-zbus = { version = "5", default-features = false, features = ["tokio"] }
-
-# Async
-tokio = { version = "1", features = ["macros", "rt", "sync"] }
+# System tray
+ksni = "0.2"
 
 # Channels
 crossbeam-channel = "0.5"
 
-# System tray
-ksni = "0.2"
+# Wayland
+wayland-client = "0.31"
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", branch = "main" }
 
-# Input capture
+# Input capture (libinput)
 input = "0.9"
 udev = "0.9"
 libc = "0.2"
 
-# Internal crates
-kiwi-common = { path = "crates/kiwi-common" }
-kiwi-input = { path = "crates/kiwi-input" }
+# Config
+serde = { version = "1.0", features = ["derive"] }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
+
+# Image processing (for tray icon)
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic"
+default-features = false
+features = [
+    "dbus-config",
+    "multi-window",
+    "tokio",
+    "wayland",
+    "winit",
+    "wgpu",
+]

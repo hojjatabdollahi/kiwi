@@ -1,7 +1,11 @@
 //! System tray icon using StatusNotifierItem (ksni)
 
-use ksni::{menu::StandardItem, Handle, MenuItem, Tray};
 use crossbeam_channel::Sender;
+use ksni::{menu::StandardItem, Handle, Icon, MenuItem, Tray};
+
+/// Embedded PNG icons at 32x32 (good size for most tray implementations)
+const ICON_ON_PNG: &[u8] = include_bytes!("../data/icons/kiwi-on-32.png");
+const ICON_OFF_PNG: &[u8] = include_bytes!("../data/icons/kiwi-off-32.png");
 
 /// Actions that can be triggered from the tray menu
 #[derive(Debug, Clone)]
@@ -15,15 +19,54 @@ pub enum TrayAction {
 pub struct KiwiTray {
     active: bool,
     tx: Sender<TrayAction>,
+    icon_on: Vec<Icon>,
+    icon_off: Vec<Icon>,
 }
 
 impl KiwiTray {
     pub fn new(active: bool, tx: Sender<TrayAction>) -> Self {
-        Self { active, tx }
+        Self {
+            active,
+            tx,
+            icon_on: load_icon_pixmap(ICON_ON_PNG),
+            icon_off: load_icon_pixmap(ICON_OFF_PNG),
+        }
     }
 
     pub fn set_active(&mut self, active: bool) {
         self.active = active;
+    }
+}
+
+/// Load a PNG and convert to ksni::Icon (ARGB format)
+fn load_icon_pixmap(png_data: &[u8]) -> Vec<Icon> {
+    match image::load_from_memory_with_format(png_data, image::ImageFormat::Png) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            let width = rgba.width() as i32;
+            let height = rgba.height() as i32;
+
+            // Convert RGBA to ARGB bytes (ksni expects ARGB in network byte order as bytes)
+            let mut argb_data = Vec::with_capacity((width * height * 4) as usize);
+            for pixel in rgba.pixels() {
+                let [r, g, b, a] = pixel.0;
+                // Pack as ARGB in big-endian (network byte order): A, R, G, B
+                argb_data.push(a);
+                argb_data.push(r);
+                argb_data.push(g);
+                argb_data.push(b);
+            }
+
+            vec![Icon {
+                width,
+                height,
+                data: argb_data,
+            }]
+        }
+        Err(e) => {
+            log::error!("Failed to load tray icon: {}", e);
+            Vec::new()
+        }
     }
 }
 
@@ -36,12 +79,11 @@ impl Tray for KiwiTray {
         "Kiwi".to_string()
     }
 
-    fn icon_name(&self) -> String {
-        // Use the installed icons (from hicolor theme)
+    fn icon_pixmap(&self) -> Vec<Icon> {
         if self.active {
-            "kiwi-on".to_string()
+            self.icon_on.clone()
         } else {
-            "kiwi-off".to_string()
+            self.icon_off.clone()
         }
     }
 

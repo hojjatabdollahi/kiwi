@@ -2,47 +2,47 @@
 
 use std::time::Instant;
 
-use crate::{OverlayPosition, Palette, PaletteType};
+use crate::config::{OverlayPosition, Palette, PaletteType};
 use cosmic::iced::{self, gradient, Background, Border, Color, Length};
 use cosmic::iced_widget::container;
 use cosmic::iced_widget::svg::{self, Svg};
 use cosmic::widget::{self, text};
 use cosmic::Element;
 
-// Embed icons at compile time (path relative to this file: kiwi-common/src/keystroke.rs)
-const ICON_RETURN: &[u8] = include_bytes!("../../../data/icons/kiwi-return-symbolic.svg");
-const ICON_BACKSPACE: &[u8] = include_bytes!("../../../data/icons/kiwi-backspace-symbolic.svg");
-const ICON_SHIFT: &[u8] = include_bytes!("../../../data/icons/kiwi-shift-symbolic.svg");
-const ICON_CTRL: &[u8] = include_bytes!("../../../data/icons/kiwi-control-symbolic.svg");
-const ICON_ALT: &[u8] = include_bytes!("../../../data/icons/kiwi-alt.svg");
-const ICON_TAB: &[u8] = include_bytes!("../../../data/icons/kiwi-tab-symbolic.svg");
-const ICON_SPACE: &[u8] = include_bytes!("../../../data/icons/kiwi-space-symbolic.svg");
-const ICON_CAPS: &[u8] = include_bytes!("../../../data/icons/kiwi-capslock-symbolic.svg");
-const ICON_SUPER: &[u8] = include_bytes!("../../../data/icons/kiwi-super-symbolic.svg");
-const ICON_ESCAPE: &[u8] = include_bytes!("../../../data/icons/kiwi-escape-symbolic.svg");
-const ICON_LEFT_CLICK: &[u8] = include_bytes!("../../../data/icons/kiwi-left-click-symbolic.svg");
-const ICON_RIGHT_CLICK: &[u8] = include_bytes!("../../../data/icons/kiwi-right-click-symbolic.svg");
+// Embed icons at compile time (path relative to this file: src/keystroke.rs)
+const ICON_RETURN: &[u8] = include_bytes!("../data/icons/kiwi-return-symbolic.svg");
+const ICON_BACKSPACE: &[u8] = include_bytes!("../data/icons/kiwi-backspace-symbolic.svg");
+const ICON_SHIFT: &[u8] = include_bytes!("../data/icons/kiwi-shift-symbolic.svg");
+const ICON_CTRL: &[u8] = include_bytes!("../data/icons/kiwi-control-symbolic.svg");
+const ICON_ALT: &[u8] = include_bytes!("../data/icons/kiwi-alt.svg");
+const ICON_TAB: &[u8] = include_bytes!("../data/icons/kiwi-tab-symbolic.svg");
+const ICON_SPACE: &[u8] = include_bytes!("../data/icons/kiwi-space-symbolic.svg");
+const ICON_CAPS: &[u8] = include_bytes!("../data/icons/kiwi-capslock-symbolic.svg");
+const ICON_SUPER: &[u8] = include_bytes!("../data/icons/kiwi-super-symbolic.svg");
+const ICON_ESCAPE: &[u8] = include_bytes!("../data/icons/kiwi-escape-symbolic.svg");
+const ICON_LEFT_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-left-click-symbolic.svg");
+const ICON_RIGHT_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-right-click-symbolic.svg");
 const ICON_MIDDLE_CLICK: &[u8] =
-    include_bytes!("../../../data/icons/kiwi-middle-click-symbolic.svg");
-const ICON_SCROLL_UP: &[u8] = include_bytes!("../../../data/icons/kiwi-scroll-up-symbolic.svg");
-const ICON_SCROLL_DOWN: &[u8] = include_bytes!("../../../data/icons/kiwi-scroll-down-symbolic.svg");
+    include_bytes!("../data/icons/kiwi-middle-click-symbolic.svg");
+const ICON_SCROLL_UP: &[u8] = include_bytes!("../data/icons/kiwi-scroll-up-symbolic.svg");
+const ICON_SCROLL_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-scroll-down-symbolic.svg");
 // Touchpad gestures
-const ICON_TAP: &[u8] = include_bytes!("../../../data/icons/kiwi-tap.svg");
-const ICON_TWO_TAP: &[u8] = include_bytes!("../../../data/icons/kiwi-two-tap.svg");
-const ICON_TWO_UP: &[u8] = include_bytes!("../../../data/icons/kiwi-two-up.svg");
-const ICON_TWO_DOWN: &[u8] = include_bytes!("../../../data/icons/kiwi-two-down.svg");
-const ICON_TWO_LEFT: &[u8] = include_bytes!("../../../data/icons/kiwi-two-left.svg");
-const ICON_TWO_RIGHT: &[u8] = include_bytes!("../../../data/icons/kiwi-two-right.svg");
-const ICON_THREE_TAP: &[u8] = include_bytes!("../../../data/icons/kiwi-three-tap.svg");
-const ICON_THREE_UP: &[u8] = include_bytes!("../../../data/icons/kiwi-three-up.svg");
-const ICON_THREE_DOWN: &[u8] = include_bytes!("../../../data/icons/kiwi-three-down.svg");
-const ICON_FOUR_TAP: &[u8] = include_bytes!("../../../data/icons/kiwi-four-tap.svg");
-const ICON_FOUR_UP: &[u8] = include_bytes!("../../../data/icons/kiwi-four-up.svg");
-const ICON_FOUR_DOWN: &[u8] = include_bytes!("../../../data/icons/kiwi-four-down.svg");
+const ICON_TAP: &[u8] = include_bytes!("../data/icons/kiwi-tap.svg");
+const ICON_TWO_TAP: &[u8] = include_bytes!("../data/icons/kiwi-two-tap.svg");
+const ICON_TWO_UP: &[u8] = include_bytes!("../data/icons/kiwi-two-up.svg");
+const ICON_TWO_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-two-down.svg");
+const ICON_TWO_LEFT: &[u8] = include_bytes!("../data/icons/kiwi-two-left.svg");
+const ICON_TWO_RIGHT: &[u8] = include_bytes!("../data/icons/kiwi-two-right.svg");
+const ICON_THREE_TAP: &[u8] = include_bytes!("../data/icons/kiwi-three-tap.svg");
+const ICON_THREE_UP: &[u8] = include_bytes!("../data/icons/kiwi-three-up.svg");
+const ICON_THREE_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-three-down.svg");
+const ICON_FOUR_TAP: &[u8] = include_bytes!("../data/icons/kiwi-four-tap.svg");
+const ICON_FOUR_UP: &[u8] = include_bytes!("../data/icons/kiwi-four-up.svg");
+const ICON_FOUR_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-four-down.svg");
 // Special emblems and drag icons
-const ICON_PRESSED_DOWN: &[u8] = include_bytes!("../../../data/icons/kiwi-pressed-down.svg");
-const ICON_CLICK_DRAG: &[u8] = include_bytes!("../../../data/icons/kiwi-click-drag.svg");
-const ICON_TAP_DRAG: &[u8] = include_bytes!("../../../data/icons/kiwi-tap-drag.svg");
+const ICON_PRESSED_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-pressed-down.svg");
+const ICON_CLICK_DRAG: &[u8] = include_bytes!("../data/icons/kiwi-click-drag.svg");
+const ICON_TAP_DRAG: &[u8] = include_bytes!("../data/icons/kiwi-tap-drag.svg");
 
 /// Threshold for combining repeated keystrokes (in milliseconds)
 pub const REPEAT_THRESHOLD_MS: u128 = 200;
