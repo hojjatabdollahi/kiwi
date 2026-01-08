@@ -12,7 +12,7 @@ use kiwi_common::{Config, PaletteType, APP_ID};
 const SERVICE_NAME: &str = "kiwi-daemon.service";
 
 /// Static palette names for dropdown (must match PaletteType::ALL order)
-const PALETTE_NAMES: &[&str] = &["Dark", "Light", "Frosted Glass"];
+const PALETTE_NAMES: &[&str] = &["Dark", "Light", "Frosted", "Kiwi"];
 
 /// Check if the daemon service is running
 fn is_daemon_running() -> bool {

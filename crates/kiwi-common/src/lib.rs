@@ -19,6 +19,7 @@ pub enum PaletteType {
     Dark,
     Light,
     Frosted,
+    Kiwi,
 }
 
 impl PaletteType {
@@ -26,13 +27,15 @@ impl PaletteType {
         PaletteType::Dark,
         PaletteType::Light,
         PaletteType::Frosted,
+        PaletteType::Kiwi,
     ];
 
     pub fn name(&self) -> &'static str {
         match self {
             PaletteType::Dark => "Dark",
             PaletteType::Light => "Light",
-            PaletteType::Frosted => "Frosted Glass",
+            PaletteType::Frosted => "Frosted",
+            PaletteType::Kiwi => "Kiwi",
         }
     }
 }

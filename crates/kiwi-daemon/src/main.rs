@@ -398,11 +398,12 @@ impl cosmic::Application for Kiwi {
                                         // Only show on release (like keys)
                                         if btn_state == kiwi_input::ButtonState::Released {
                                             let btn_str = match (button, is_touchpad) {
-                                                (272, true) => "Tap",      // Touchpad tap
-                                                (273, true) => "2Tap",     // Touchpad two-finger tap
+                                                (272, true) => "Tap",      // Touchpad 1-finger tap
+                                                (273, true) => "2Tap",     // Touchpad 2-finger tap
+                                                (274, true) => "3Tap",     // Touchpad 3-finger tap
                                                 (272, false) => "LClick",  // Mouse left click
                                                 (273, false) => "RClick",  // Mouse right click
-                                                (274, _) => "MClick",      // Middle click
+                                                (274, false) => "MClick",  // Mouse middle click
                                                 _ => continue,
                                             };
                                             
@@ -444,21 +445,69 @@ impl cosmic::Application for Kiwi {
                                             continue;
                                         }
                                         
-                                        // Only handle vertical scroll, ignore tiny movements
-                                        if axis == kiwi_input::Axis::Vertical && value.abs() > 5.0 {
-                                            let scroll_str = if value > 0.0 {
-                                                "2Down"
-                                            } else {
-                                                "2Up"
-                                            };
-                                            
-                                            let keystroke = if s.modifiers.any() {
-                                                Keystroke::combination(&s.modifiers, scroll_str.to_string(), false)
-                                            } else {
-                                                Keystroke::single(scroll_str.to_string(), false)
-                                            };
-                                            push_history(&mut s.history, keystroke);
+                                        // Input layer already accumulates and thresholds
+                                        let scroll_str = match axis {
+                                            kiwi_input::Axis::Vertical => {
+                                                if value > 0.0 { "2Down" } else { "2Up" }
+                                            }
+                                            kiwi_input::Axis::Horizontal => {
+                                                if value > 0.0 { "2Right" } else { "2Left" }
+                                            }
+                                        };
+                                        
+                                        let keystroke = if s.modifiers.any() {
+                                            Keystroke::combination(&s.modifiers, scroll_str.to_string(), false)
+                                        } else {
+                                            Keystroke::single(scroll_str.to_string(), false)
+                                        };
+                                        push_history(&mut s.history, keystroke);
+                                    }
+                                }
+                                InputEvent::Swipe { finger_count, direction } => {
+                                    if let Ok(mut s) = input_state.lock() {
+                                        if !s.enabled {
+                                            continue;
                                         }
+                                        
+                                        use kiwi_input::SwipeDirection;
+                                        
+                                        // Map finger count + direction to gesture name
+                                        let gesture_str = match (finger_count, direction) {
+                                            (3, SwipeDirection::Up) => "3Up",
+                                            (3, SwipeDirection::Down) => "3Down",
+                                            (4, SwipeDirection::Up) => "4Up",
+                                            (4, SwipeDirection::Down) => "4Down",
+                                            // Could add left/right if needed
+                                            _ => continue,
+                                        };
+                                        
+                                        let keystroke = if s.modifiers.any() {
+                                            Keystroke::combination(&s.modifiers, gesture_str.to_string(), false)
+                                        } else {
+                                            Keystroke::single(gesture_str.to_string(), false)
+                                        };
+                                        push_history(&mut s.history, keystroke);
+                                    }
+                                }
+                                InputEvent::Hold { finger_count } => {
+                                    if let Ok(mut s) = input_state.lock() {
+                                        if !s.enabled {
+                                            continue;
+                                        }
+                                        
+                                        // Map finger count to tap name
+                                        let tap_str = match finger_count {
+                                            3 => "3Tap",
+                                            4 => "4Tap",
+                                            _ => continue,
+                                        };
+                                        
+                                        let keystroke = if s.modifiers.any() {
+                                            Keystroke::combination(&s.modifiers, tap_str.to_string(), false)
+                                        } else {
+                                            Keystroke::single(tap_str.to_string(), false)
+                                        };
+                                        push_history(&mut s.history, keystroke);
                                     }
                                 }
                             }

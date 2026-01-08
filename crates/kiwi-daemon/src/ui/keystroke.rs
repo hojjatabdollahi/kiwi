@@ -25,10 +25,19 @@ const ICON_RIGHT_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-righ
 const ICON_SCROLL_CLICK: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-click-symbolic.svg");
 const ICON_SCROLL_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-up-symbolic.svg");
 const ICON_SCROLL_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-scroll-down-symbolic.svg");
-const ICON_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-tap-symbolic.svg");
-const ICON_TWO_FINGER_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-finger-tap-symbolic.svg");
-const ICON_TWO_FINGER_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-finger-up-symbolic.svg");
-const ICON_TWO_FINGER_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-finger-down-symbolic.svg");
+// Touchpad gestures
+const ICON_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-tap.svg");
+const ICON_TWO_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-tap.svg");
+const ICON_TWO_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-up.svg");
+const ICON_TWO_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-down.svg");
+const ICON_TWO_LEFT: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-left.svg");
+const ICON_TWO_RIGHT: &[u8] = include_bytes!("../../../../data/icons/kiwi-two-right.svg");
+const ICON_THREE_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-three-tap.svg");
+const ICON_THREE_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-three-up.svg");
+const ICON_THREE_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-three-down.svg");
+const ICON_FOUR_TAP: &[u8] = include_bytes!("../../../../data/icons/kiwi-four-tap.svg");
+const ICON_FOUR_UP: &[u8] = include_bytes!("../../../../data/icons/kiwi-four-up.svg");
+const ICON_FOUR_DOWN: &[u8] = include_bytes!("../../../../data/icons/kiwi-four-down.svg");
 
 
 
@@ -99,12 +108,34 @@ impl Palette {
         }
     }
 
+    /// Kiwi theme - vibrant green with brown accents like the fruit
+    pub fn kiwi() -> Self {
+        Self {
+            // Cream/white text for contrast on green
+            text: Color::from_rgb(0.98, 0.97, 0.92),
+            // Pressed: darker kiwi green
+            bg_pressed: Color::from_rgba(0.35, 0.55, 0.18, 0.75),
+            // Released: kiwi flesh green with gradient to lighter center
+            bg_released: Color::from_rgba(0.55, 0.75, 0.25, 0.55),
+            bg_gradient_end: Some(Color::from_rgba(0.7, 0.82, 0.45, 0.45)),
+            // Brown border like kiwi skin
+            border: Color::from_rgba(0.45, 0.32, 0.2, 0.5),
+            // Lighter green for plus
+            plus: Color::from_rgba(0.85, 0.9, 0.75, 0.8),
+            // Dark seeds color for count
+            count: Color::from_rgba(0.15, 0.12, 0.08, 1.0),
+            // Cream background for count badge
+            count_bg: Color::from_rgba(0.95, 0.93, 0.85, 0.85),
+        }
+    }
+
     /// Get palette from type
     pub fn from_type(palette_type: PaletteType) -> Self {
         match palette_type {
             PaletteType::Dark => Self::dark(),
             PaletteType::Light => Self::light(),
             PaletteType::Frosted => Self::frosted(),
+            PaletteType::Kiwi => Self::kiwi(),
         }
     }
 
@@ -302,15 +333,25 @@ fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
         "Caps" => Some((ICON_CAPS, true)),
         "Super" => Some((ICON_SUPER, false)), // Keep original colors
         "Esc" => Some((ICON_ESCAPE, true)),
+        // Mouse
         "LClick" => Some((ICON_LEFT_CLICK, true)),
         "RClick" => Some((ICON_RIGHT_CLICK, true)),
         "MClick" => Some((ICON_SCROLL_CLICK, true)),
         "ScrollUp" => Some((ICON_SCROLL_UP, true)),
         "ScrollDown" => Some((ICON_SCROLL_DOWN, true)),
+        // Touchpad gestures
         "Tap" => Some((ICON_TAP, true)),
-        "2Tap" => Some((ICON_TWO_FINGER_TAP, true)),
-        "2Up" => Some((ICON_TWO_FINGER_UP, true)),
-        "2Down" => Some((ICON_TWO_FINGER_DOWN, true)),
+        "2Tap" => Some((ICON_TWO_TAP, true)),
+        "2Up" => Some((ICON_TWO_UP, true)),
+        "2Down" => Some((ICON_TWO_DOWN, true)),
+        "2Left" => Some((ICON_TWO_LEFT, true)),
+        "2Right" => Some((ICON_TWO_RIGHT, true)),
+        "3Tap" => Some((ICON_THREE_TAP, true)),
+        "3Up" => Some((ICON_THREE_UP, true)),
+        "3Down" => Some((ICON_THREE_DOWN, true)),
+        "4Tap" => Some((ICON_FOUR_TAP, true)),
+        "4Up" => Some((ICON_FOUR_UP, true)),
+        "4Down" => Some((ICON_FOUR_DOWN, true)),
         _ => None,
     }
 }
