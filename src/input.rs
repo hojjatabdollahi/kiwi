@@ -4,15 +4,66 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use evdev::KeyCode;
+use xkbcommon::xkb;
 
 use crate::capture::{Axis, ButtonState, InputCapture, InputEvent, KeyState, SwipeDirection};
+use crate::config::KeyDisplayMode;
 use crate::keystroke::{KeyModifiers, Keystroke};
 use crate::overlay::{push_history, SharedState};
+
+/// XKB state wrapper for character lookup
+struct XkbState {
+    state: xkb::State,
+}
+
+impl XkbState {
+    /// Create a new XKB state using the current keyboard layout
+    fn new() -> Option<Self> {
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap = xkb::Keymap::new_from_names(
+            &context,
+            "",   // rules (empty = default)
+            "",   // model (empty = default)
+            "",   // layout (empty = current)
+            "",   // variant (empty = default)
+            None, // options
+            xkb::COMPILE_NO_FLAGS,
+        )?;
+        let state = xkb::State::new(&keymap);
+        Some(Self { state })
+    }
+
+    /// Get the typed character for a key press with current modifiers
+    /// Returns None if the key doesn't produce a character
+    fn get_utf8(&self, evdev_keycode: u32) -> Option<String> {
+        // evdev keycodes are offset by 8 from XKB keycodes
+        let xkb_keycode: xkb::Keycode = (evdev_keycode + 8).into();
+        let utf8 = self.state.key_get_utf8(xkb_keycode);
+
+        // Filter out control characters and empty strings
+        if utf8.is_empty() || utf8.chars().all(|c| c.is_control()) {
+            None
+        } else {
+            Some(utf8)
+        }
+    }
+
+    /// Update modifier state based on key press/release
+    fn update_key(&mut self, evdev_keycode: u32, is_pressed: bool) {
+        let xkb_keycode: xkb::Keycode = (evdev_keycode + 8).into();
+        let direction = if is_pressed {
+            xkb::KeyDirection::Down
+        } else {
+            xkb::KeyDirection::Up
+        };
+        self.state.update_key(xkb_keycode, direction);
+    }
+}
 
 /// Convert key code to display string using evdev
 pub fn key_to_string(key: u32) -> Option<String> {
     let evdev_key = KeyCode::new(key as u16);
-    
+
     // Special keys with custom symbols/names
     match evdev_key {
         // Modifiers
@@ -20,7 +71,7 @@ pub fn key_to_string(key: u32) -> Option<String> {
         KeyCode::KEY_LEFTALT | KeyCode::KEY_RIGHTALT => return Some("Alt".to_string()),
         KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT => return Some("⇧".to_string()),
         KeyCode::KEY_LEFTMETA | KeyCode::KEY_RIGHTMETA => return Some("Super".to_string()),
-        
+
         // Special keys with symbols
         KeyCode::KEY_ENTER | KeyCode::KEY_KPENTER => return Some("↵".to_string()),
         KeyCode::KEY_BACKSPACE => return Some("⌫".to_string()),
@@ -28,13 +79,13 @@ pub fn key_to_string(key: u32) -> Option<String> {
         KeyCode::KEY_TAB => return Some("Tab".to_string()),
         KeyCode::KEY_ESC => return Some("Esc".to_string()),
         KeyCode::KEY_CAPSLOCK => return Some("Caps".to_string()),
-        
+
         // Arrow keys
         KeyCode::KEY_UP => return Some("↑".to_string()),
         KeyCode::KEY_DOWN => return Some("↓".to_string()),
         KeyCode::KEY_LEFT => return Some("←".to_string()),
         KeyCode::KEY_RIGHT => return Some("→".to_string()),
-        
+
         // Navigation
         KeyCode::KEY_HOME => return Some("Home".to_string()),
         KeyCode::KEY_END => return Some("End".to_string()),
@@ -42,10 +93,10 @@ pub fn key_to_string(key: u32) -> Option<String> {
         KeyCode::KEY_PAGEDOWN => return Some("PgDn".to_string()),
         KeyCode::KEY_INSERT => return Some("Ins".to_string()),
         KeyCode::KEY_DELETE => return Some("Del".to_string()),
-        
+
         _ => {}
     }
-    
+
     // For everything else, use the evdev name and prettify it
     let name = format!("{:?}", evdev_key);
     prettify_key_name(&name)
@@ -57,35 +108,35 @@ fn prettify_key_name(name: &str) -> Option<String> {
     if name.starts_with("unknown") {
         return None;
     }
-    
+
     // Strip "KEY_" prefix
     let stripped = if name.starts_with("KEY_") {
         &name[4..]
     } else {
         name
     };
-    
+
     // Handle keypad keys
     if stripped.starts_with("KP") {
         let kp_key = &stripped[2..];
         return Some(format!("KP{}", kp_key));
     }
-    
+
     // Single letter/number keys - return as-is
     if stripped.len() == 1 {
         return Some(stripped.to_string());
     }
-    
+
     // Function keys (F1-F12)
     if stripped.starts_with('F') && stripped[1..].parse::<u32>().is_ok() {
         return Some(stripped.to_string());
     }
-    
+
     // Number keys (0-9 are KEY_0 through KEY_9 but also KEY_1 = 2, etc.)
     if stripped.parse::<u32>().is_ok() {
         return Some(stripped.to_string());
     }
-    
+
     // Common symbols - return the symbol character
     match stripped {
         "MINUS" => return Some("-".to_string()),
@@ -104,11 +155,11 @@ fn prettify_key_name(name: &str) -> Option<String> {
         "KPMINUS" => return Some("-".to_string()),
         "KPSLASH" => return Some("/".to_string()),
         "KPDOT" => return Some(".".to_string()),
-        
+
         // These are handled above but just in case
         "SPACE" => return Some("␣".to_string()),
         "ENTER" => return Some("↵".to_string()),
-        
+
         // For other named keys, title-case them
         _ => {
             // Convert SCROLLLOCK to ScrollLock, NUMLOCK to NumLock, etc.
@@ -150,6 +201,15 @@ pub fn spawn_input_capture(state: Arc<Mutex<SharedState>>) {
         match InputCapture::new() {
             Ok(mut capture) => {
                 log::info!("Input capture started");
+
+                // Initialize XKB state for character lookup
+                let mut xkb_state = XkbState::new();
+                if xkb_state.is_none() {
+                    log::warn!(
+                        "Failed to initialize XKB state, falling back to physical key names"
+                    );
+                }
+
                 loop {
                     if let Err(e) = capture.dispatch() {
                         log::error!("Input dispatch error: {}", e);
@@ -157,7 +217,7 @@ pub fn spawn_input_capture(state: Arc<Mutex<SharedState>>) {
                     }
 
                     for event in capture.events() {
-                        process_input_event(&state, event);
+                        process_input_event(&state, event, &mut xkb_state);
                     }
 
                     // Small sleep to prevent busy-waiting
@@ -172,20 +232,58 @@ pub fn spawn_input_capture(state: Arc<Mutex<SharedState>>) {
 }
 
 /// Process a single input event
-fn process_input_event(state: &Arc<Mutex<SharedState>>, event: InputEvent) {
+fn process_input_event(
+    state: &Arc<Mutex<SharedState>>,
+    event: InputEvent,
+    xkb_state: &mut Option<XkbState>,
+) {
     match event {
         InputEvent::Key {
             key,
             state: key_state,
         } => {
-            if let Ok(mut s) = state.lock() {
-                if !s.enabled {
+            // Get display mode and enabled state first
+            let (enabled, display_mode) = {
+                if let Ok(s) = state.lock() {
+                    (s.enabled, s.key_display_mode)
+                } else {
                     return;
                 }
+            };
 
-                let is_mod = is_modifier(key);
-                let key_str = key_to_string(key);
+            if !enabled {
+                // Still update XKB state even when disabled to keep modifier state in sync
+                if let Some(ref mut xkb) = xkb_state {
+                    xkb.update_key(key, key_state == KeyState::Pressed);
+                }
+                return;
+            }
 
+            let is_mod = is_modifier(key);
+
+            // Get the key string based on display mode
+            let key_str = if is_mod {
+                // Modifiers always use physical key names
+                key_to_string(key)
+            } else {
+                match display_mode {
+                    KeyDisplayMode::TypedCharacter => {
+                        // Try to get the typed character from XKB
+                        xkb_state
+                            .as_ref()
+                            .and_then(|xkb| xkb.get_utf8(key))
+                            .or_else(|| key_to_string(key)) // Fallback to physical key
+                    }
+                    KeyDisplayMode::PhysicalKey => key_to_string(key),
+                }
+            };
+
+            // Update XKB state for modifier tracking
+            if let Some(ref mut xkb) = xkb_state {
+                xkb.update_key(key, key_state == KeyState::Pressed);
+            }
+
+            if let Ok(mut s) = state.lock() {
                 match key_state {
                     KeyState::Pressed => {
                         if is_mod {
@@ -340,7 +438,11 @@ fn process_input_event(state: &Arc<Mutex<SharedState>>, event: InputEvent) {
 
                 // Only handle vertical scroll, ignore tiny movements
                 if axis == Axis::Vertical && value.abs() > 10.0 {
-                    let scroll_str = if value > 0.0 { "ScrollDown" } else { "ScrollUp" };
+                    let scroll_str = if value > 0.0 {
+                        "ScrollDown"
+                    } else {
+                        "ScrollUp"
+                    };
 
                     let keystroke = if s.modifiers.any() {
                         Keystroke::combination(&s.modifiers, scroll_str.to_string(), false)

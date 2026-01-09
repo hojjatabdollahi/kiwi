@@ -33,6 +33,35 @@ pub enum OverlayPosition {
     BottomCenter,
 }
 
+/// Key display mode - typed character vs physical key
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KeyDisplayMode {
+    /// Show the typed character (e.g., "Shift+@")
+    #[default]
+    TypedCharacter,
+    /// Show the physical key name (e.g., "Shift+2")
+    PhysicalKey,
+}
+
+impl KeyDisplayMode {
+    pub const ALL: &'static [KeyDisplayMode] =
+        &[KeyDisplayMode::TypedCharacter, KeyDisplayMode::PhysicalKey];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            KeyDisplayMode::TypedCharacter => "Typed Character",
+            KeyDisplayMode::PhysicalKey => "Physical Key",
+        }
+    }
+
+    pub fn example(&self) -> &'static str {
+        match self {
+            KeyDisplayMode::TypedCharacter => "Shift+@",
+            KeyDisplayMode::PhysicalKey => "Shift+2",
+        }
+    }
+}
+
 impl OverlayPosition {
     pub const ALL: &'static [OverlayPosition] = &[
         OverlayPosition::TopLeft,
@@ -188,7 +217,7 @@ fn color_with_opacity(color: Color, opacity: f32) -> Color {
 
 /// User configuration - persisted via cosmic-config
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, CosmicConfigEntry)]
-#[version = 5]
+#[version = 6]
 pub struct Config {
     /// Whether keystroke visualization is enabled
     pub enabled: bool,
@@ -200,6 +229,8 @@ pub struct Config {
     pub palette: PaletteType,
     /// Position of the overlay on screen
     pub position: OverlayPosition,
+    /// Key display mode - typed character or physical key
+    pub key_display_mode: KeyDisplayMode,
 }
 
 impl Default for Config {
@@ -210,7 +241,7 @@ impl Default for Config {
             fade_duration: 5.0,
             palette: PaletteType::Dark,
             position: OverlayPosition::BottomLeft,
+            key_display_mode: KeyDisplayMode::TypedCharacter,
         }
     }
 }
-

@@ -83,6 +83,7 @@ pub enum Message {
     SetFadeDuration(f32),
     SetPaletteIndex(usize),
     SetPosition(OverlayPosition),
+    SetKeyDisplayMode(config::KeyDisplayMode),
     SaveConfig,
     ConfigChanged(Config),
     // Overlay
@@ -123,6 +124,7 @@ impl cosmic::Application for KiwiApp {
             config.fade_duration,
             config.palette,
             config.position,
+            config.key_display_mode,
         )));
 
         // Always start input capture (it checks enabled state internally)
@@ -164,6 +166,7 @@ impl cosmic::Application for KiwiApp {
             self.config.fade_duration,
             self.config.palette,
             self.config.position,
+            self.config.key_display_mode,
             self.config.enabled,
         )
     }
@@ -179,6 +182,7 @@ impl cosmic::Application for KiwiApp {
                 self.config.fade_duration,
                 self.config.palette,
                 self.config.position,
+                self.config.key_display_mode,
                 self.config.enabled,
             )
         }
@@ -318,6 +322,15 @@ impl cosmic::Application for KiwiApp {
                 // Recreate layer surfaces if position changed
                 if old_position != position {
                     return self.recreate_layer_surfaces();
+                }
+            }
+            Message::SetKeyDisplayMode(mode) => {
+                self.config.key_display_mode = mode;
+                self.save_config();
+                
+                // Update shared state
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.key_display_mode = mode;
                 }
             }
             Message::SaveConfig => {

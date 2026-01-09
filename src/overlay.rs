@@ -29,6 +29,8 @@ pub struct SharedState {
     pub palette: PaletteType,
     /// Overlay position
     pub position: OverlayPosition,
+    /// Key display mode (typed character vs physical key)
+    pub key_display_mode: crate::config::KeyDisplayMode,
     /// Current modifier state (live)
     pub modifiers: KeyModifiers,
     /// Peak modifiers held during current modifier session (for showing full combo on release)
@@ -51,6 +53,7 @@ impl SharedState {
         fade_duration: f32,
         palette: PaletteType,
         position: OverlayPosition,
+        key_display_mode: crate::config::KeyDisplayMode,
     ) -> Self {
         Self {
             enabled,
@@ -58,6 +61,7 @@ impl SharedState {
             fade_duration,
             palette,
             position,
+            key_display_mode,
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
             current_key: None,
@@ -74,6 +78,7 @@ impl SharedState {
         self.fade_duration = config.fade_duration;
         self.palette = config.palette;
         self.position = config.position;
+        self.key_display_mode = config.key_display_mode;
     }
 
     /// Clean up expired keystrokes
@@ -91,6 +96,7 @@ impl Default for SharedState {
             fade_duration: 5.0,
             palette: PaletteType::default(),
             position: OverlayPosition::default(),
+            key_display_mode: crate::config::KeyDisplayMode::default(),
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
             current_key: None,

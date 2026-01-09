@@ -2884,6 +2884,7 @@ dependencies = [
  "serde",
  "udev",
  "wayland-client",
+ "xkbcommon 0.8.0",
 ]
 
 [[package]]

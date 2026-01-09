@@ -7,7 +7,7 @@ use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::widget::scrollable;
 
-use crate::config::{OverlayPosition, PaletteType, APP_VERSION};
+use crate::config::{KeyDisplayMode, OverlayPosition, PaletteType, APP_VERSION};
 use crate::keystroke::{keystroke_widget, Keystroke};
 use crate::position_selector::PositionSelector;
 use crate::Message;
@@ -30,6 +30,7 @@ pub fn settings_view(
     fade_duration: f32,
     palette: PaletteType,
     position: OverlayPosition,
+    key_display_mode: KeyDisplayMode,
     is_active: bool,
 ) -> Element<'static, Message> {
     // Find current selection index
@@ -80,6 +81,35 @@ pub fn settings_view(
         .padding([10, 0]) // vertical padding
         .align_x(cosmic::iced::alignment::Horizontal::Center);
 
+    // Key Display Mode radio buttons
+    let display_mode_section = widget::column()
+        .spacing(4)
+        .push(widget::text::body("Key Display Mode"))
+        .push(
+            widget::row()
+                .spacing(15)
+                .push(
+                    widget::radio(
+                        KeyDisplayMode::TypedCharacter.name(),
+                        KeyDisplayMode::TypedCharacter,
+                        Some(key_display_mode),
+                        Message::SetKeyDisplayMode,
+                    ),
+                )
+                .push(
+                    widget::radio(
+                        KeyDisplayMode::PhysicalKey.name(),
+                        KeyDisplayMode::PhysicalKey,
+                        Some(key_display_mode),
+                        Message::SetKeyDisplayMode,
+                    ),
+                ),
+        )
+        .push(
+            widget::text::caption(format!("Example: {}", key_display_mode.example()))
+                .class(cosmic::theme::Text::Color(Color::from_rgba(0.6, 0.6, 0.6, 1.0))),
+        );
+
     let content = widget::column()
         .padding(10)
         .spacing(8)
@@ -93,6 +123,10 @@ pub fn settings_view(
                 .push(widget::Space::with_width(Length::Fill))
                 .push(widget::toggler(is_active).on_toggle(Message::ToggleActive)),
         )
+        // Separator
+        .push(widget::divider::horizontal::default())
+        // Key Display Mode section
+        .push(display_mode_section)
         // Separator
         .push(widget::divider::horizontal::default())
         // Preview in fixed container (centered)
