@@ -121,7 +121,7 @@ impl cosmic::Application for KiwiApp {
     type Flags = Flags;
     type Message = Message;
 
-    const APP_ID: &'static str = "dev.hojjat.kiwi";
+    const APP_ID: &'static str = "io.github.hojjatabdollahi.kiwi";
 
     fn core(&self) -> &cosmic::Core {
         &self.core

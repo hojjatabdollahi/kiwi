@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Kiwi
-Comment=Keystroke visualization overlay for screen recordings and presentations
+Comment=A key visualizer for COSMIC DE. Shows an overlay of your keystrokes, mouse clicks, and gestures.
 Type=Application
 Exec=kiwi
 Terminal=false

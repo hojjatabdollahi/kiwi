@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub use cosmic::iced::Color;
 
 /// The APP_ID used for cosmic-config
-pub const APP_ID: &str = "dev.hojjat.kiwi";
+pub const APP_ID: &str = "io.github.hojjatabdollahi.kiwi";
 /// Version pulled from Cargo.toml at compile time
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 

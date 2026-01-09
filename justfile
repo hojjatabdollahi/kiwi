@@ -1,7 +1,7 @@
 set dotenv-load := true
 
 name := 'kiwi'
-export APPID := 'dev.hojjat.kiwi'
+export APPID := 'io.github.hojjatabdollahi.kiwi'
 
 rootdir := ''
 prefix := '/usr'
@@ -13,8 +13,8 @@ export INSTALL_DIR := base-dir / 'share'
 app-src := 'target' / 'release' / 'kiwi'
 app-dst := base-dir / 'bin' / 'kiwi'
 
-desktop-src := 'data' / 'dev.hojjat.kiwi.desktop'
-desktop-dst := base-dir / 'share' / 'applications' / 'dev.hojjat.kiwi.desktop'
+desktop-src := 'data' / 'io.github.hojjatabdollahi.kiwi.desktop'
+desktop-dst := base-dir / 'share' / 'applications' / 'io.github.hojjatabdollahi.kiwi.desktop'
 
 icon-dir := base-dir / 'share' / 'icons' / 'hicolor'
 icon-src-dir := 'data' / 'icons'
