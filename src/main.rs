@@ -233,12 +233,11 @@ impl cosmic::Application for KiwiApp {
                 // Otherwise might be a layer surface being destroyed
             }
             Message::TrayShowSettings => {
-                log::info!("TrayShowSettings: Opening settings window");
-                
-                // If window already exists, just focus it
+                // If window already exists, close it (toggle behavior)
                 if let Some(id) = self.core.main_window_id() {
-                    log::info!("Window already open ({:?}), focusing", id);
-                    return cosmic::iced::window::gain_focus(id).map(|_: ()| cosmic::Action::None);
+                    log::info!("Window already open ({:?}), closing", id);
+                    self.core_mut().set_main_window_id(None);
+                    return cosmic::iced::window::close(id);
                 }
                 
                 // No window exists, open a new one

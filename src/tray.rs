@@ -3,7 +3,7 @@
 use crossbeam_channel::Sender;
 use ksni::{
     blocking::TrayMethods,
-    menu::{CheckmarkItem, StandardItem},
+    menu::StandardItem,
     Icon, MenuItem, Tray,
 };
 
@@ -139,19 +139,32 @@ impl Tray for KiwiTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let tx_toggle = self.tx.clone();
+        let tx_activate = self.tx.clone();
+        let tx_deactivate = self.tx.clone();
         let tx_settings = self.tx.clone();
         let tx_quit = self.tx.clone();
         let is_active = self.active;
 
         vec![
-            // Active checkbox at top
-            MenuItem::Checkmark(CheckmarkItem {
-                label: "Active".to_string(),
-                checked: is_active,
+            // "Activate" - only visible when inactive
+            MenuItem::Standard(StandardItem {
+                label: "Activate".to_string(),
+                visible: !is_active,
                 activate: Box::new(move |_| {
-                    log::info!("Menu: Active toggled");
-                    if let Err(e) = tx_toggle.send(TrayAction::ToggleActive) {
+                    log::info!("Menu: Activate clicked");
+                    if let Err(e) = tx_activate.send(TrayAction::ToggleActive) {
+                        log::error!("Failed to send ToggleActive: {}", e);
+                    }
+                }),
+                ..Default::default()
+            }),
+            // "Deactivate" - only visible when active
+            MenuItem::Standard(StandardItem {
+                label: "Deactivate".to_string(),
+                visible: is_active,
+                activate: Box::new(move |_| {
+                    log::info!("Menu: Deactivate clicked");
+                    if let Err(e) = tx_deactivate.send(TrayAction::ToggleActive) {
                         log::error!("Failed to send ToggleActive: {}", e);
                     }
                 }),
