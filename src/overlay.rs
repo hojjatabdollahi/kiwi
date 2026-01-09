@@ -125,88 +125,18 @@ pub struct OutputState {
     pub output: WlOutput,
     pub surface_id: window::Id,
     pub name: Option<String>,
-    pub width: u32, // Window width for this output
 }
 
-/// Calculate window height based on key size (key + count badge + padding)
-pub fn window_height_for_key_size(key_size: f32) -> u32 {
-    // key_size + spacing (5%) + count text (30%) + some padding
-    let count_height = key_size * 0.35; // font size + line height
-    let spacing = key_size * 0.05;
-    let padding = 10.0;
-    (key_size + spacing + count_height + padding).max(60.0) as u32
-}
-
-/// Calculate window width based on key_size (fits ~12 keys + gaps)
-pub fn window_width_for_key_size(key_size: f32) -> u32 {
-    // Enough space for about 12 single keys with gaps, or ~6 combos
-    let key_gap = 4.0;
-    let margin = 40.0;
-    let num_keys = 12.0;
-    let width = (key_size * num_keys) + (key_gap * (num_keys - 1.0)) + margin;
-    width.clamp(400.0, 1600.0) as u32 // Clamp between 400-1600
-}
-
-/// Create a layer surface for an output
+/// Create a full-screen layer surface for an output
+/// Positioning is handled via layout in view_overlay, not surface positioning
 pub fn create_layer_surface_for_output(
     output: &WlOutput,
     id: window::Id,
-    key_size: f32,
-    position: OverlayPosition,
-) -> (cosmic::iced::Task<cosmic::Action<Message>>, u32) {
-    let width = window_width_for_key_size(key_size);
-    let height = window_height_for_key_size(key_size);
+) -> cosmic::iced::Task<cosmic::Action<Message>> {
+    // Anchor to all edges = full screen
+    let anchor = Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT;
 
-    // Determine anchor and margin based on position
-    let (anchor, margin) = match position {
-        OverlayPosition::TopLeft => (
-            Anchor::TOP | Anchor::LEFT,
-            cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin {
-                top: 20,
-                left: 20,
-                bottom: 0,
-                right: 0,
-            },
-        ),
-        OverlayPosition::TopRight => (
-            Anchor::TOP | Anchor::RIGHT,
-            cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin {
-                top: 20,
-                right: 20,
-                bottom: 0,
-                left: 0,
-            },
-        ),
-        OverlayPosition::BottomLeft => (
-            Anchor::BOTTOM | Anchor::LEFT,
-            cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin {
-                bottom: 20,
-                left: 20,
-                top: 0,
-                right: 0,
-            },
-        ),
-        OverlayPosition::BottomRight => (
-            Anchor::BOTTOM | Anchor::RIGHT,
-            cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin {
-                bottom: 20,
-                right: 20,
-                top: 0,
-                left: 0,
-            },
-        ),
-        OverlayPosition::BottomCenter => (
-            Anchor::BOTTOM,
-            cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin {
-                bottom: 20,
-                left: 0,
-                top: 0,
-                right: 0,
-            },
-        ),
-    };
-
-    let task = get_layer_surface(SctkLayerSurfaceSettings {
+    get_layer_surface(SctkLayerSurfaceSettings {
         id,
         layer: Layer::Overlay,
         keyboard_interactivity: KeyboardInteractivity::None,
@@ -215,12 +145,12 @@ pub fn create_layer_surface_for_output(
         anchor,
         output: IcedOutput::Output(output.clone()),
         namespace: "kiwi".to_string(),
-        size: Some((Some(width), Some(height))),
-        margin,
+        // None = compositor decides size (full screen when anchored to all edges)
+        size: None,
+        margin: cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin::default(),
         exclusive_zone: -1,
-        size_limits: Limits::NONE.min_width(300.0).min_height(1.0),
-    });
-    (task, width)
+        size_limits: Limits::NONE,
+    })
 }
 
 /// Destroy a layer surface
@@ -228,11 +158,8 @@ pub fn destroy_surface(surface_id: window::Id) -> cosmic::iced::Task<cosmic::Act
     destroy_layer_surface(surface_id)
 }
 
-/// Render the overlay view for a specific window
-pub fn view_overlay(
-    state: &Arc<Mutex<SharedState>>,
-    window_width: f32,
-) -> cosmic::Element<'static, Message> {
+/// Render the overlay view (full-screen, with layout positioning)
+pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static, Message> {
     let (keystrokes, key_size, fade_duration, palette, position) = state
         .lock()
         .map(|s| {
@@ -291,11 +218,57 @@ pub fn view_overlay(
             OverlayPosition::default(),
         ));
 
-    if keystrokes.is_empty() {
-        // Empty transparent container when no keystrokes
-        cosmic::widget::container(cosmic::widget::text("")).into()
+    // Determine vertical and horizontal alignment based on position
+    let (v_align, h_align) = match position {
+        OverlayPosition::TopLeft => (
+            cosmic::iced::alignment::Vertical::Top,
+            cosmic::iced::alignment::Horizontal::Left,
+        ),
+        OverlayPosition::TopRight => (
+            cosmic::iced::alignment::Vertical::Top,
+            cosmic::iced::alignment::Horizontal::Right,
+        ),
+        OverlayPosition::BottomLeft => (
+            cosmic::iced::alignment::Vertical::Bottom,
+            cosmic::iced::alignment::Horizontal::Left,
+        ),
+        OverlayPosition::BottomRight => (
+            cosmic::iced::alignment::Vertical::Bottom,
+            cosmic::iced::alignment::Horizontal::Right,
+        ),
+        OverlayPosition::BottomCenter => (
+            cosmic::iced::alignment::Vertical::Bottom,
+            // Right edge at center - we'll handle this specially
+            cosmic::iced::alignment::Horizontal::Center,
+        ),
+    };
+
+    let content: cosmic::Element<'static, Message> = if keystrokes.is_empty() {
+        // Empty widget when no keystrokes
+        cosmic::widget::Space::new(0, 0).into()
     } else {
-        // Show keystrokes row with alignment based on position
-        keystrokes_row(&keystrokes, key_size, fade_duration, palette, window_width, position)
-    }
+        // Show keystrokes row (without its own container since we'll position it here)
+        keystrokes_row(&keystrokes, key_size, fade_duration, palette, position)
+    };
+
+    // For BottomCenter: we want the right edge of the content at the center
+    // Use a row with a spacer that takes up half the screen, then the content
+    let positioned_content: cosmic::Element<'static, Message> = if position == OverlayPosition::BottomCenter {
+        cosmic::widget::row()
+            .push(cosmic::widget::Space::with_width(cosmic::iced::Length::Fill))
+            .push(content)
+            .push(cosmic::widget::Space::with_width(cosmic::iced::Length::Fill))
+            .into()
+    } else {
+        content
+    };
+
+    // Full-screen container with proper alignment
+    cosmic::widget::container(positioned_content)
+        .width(cosmic::iced::Length::Fill)
+        .height(cosmic::iced::Length::Fill)
+        .align_x(h_align)
+        .align_y(v_align)
+        .padding(20) // Margin from edges
+        .into()
 }

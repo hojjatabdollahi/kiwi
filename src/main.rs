@@ -55,8 +55,6 @@ struct KiwiApp {
     #[allow(dead_code)]
     config_handler: Option<cosmic_config::Config>,
     pending_save: bool,
-    /// Key size when surfaces were last created (for detecting when to recreate)
-    last_surface_key_size: f32,
     /// Crossbeam receiver for tray actions
     tray_rx: CbReceiver<tray::TrayAction>,
     /// Handle to keep tray alive
@@ -133,13 +131,11 @@ impl cosmic::Application for KiwiApp {
         // Create tray icon
         let tray_handle = tray::create_tray(config.enabled, flags.tray_tx);
 
-        let last_surface_key_size = config.key_size;
         let app = Self {
             core,
             config,
             config_handler,
             pending_save: false,
-            last_surface_key_size,
             tray_rx: flags.tray_rx,
             tray_handle: Some(tray_handle),
             shared_state,
@@ -174,9 +170,8 @@ impl cosmic::Application for KiwiApp {
 
     fn view_window(&self, id: window::Id) -> Element<'_, Self::Message> {
         // Check if this is an overlay (layer surface)
-        if let Some(output) = self.outputs.iter().find(|o| o.surface_id == id) {
-            let window_width = output.width as f32;
-            view_overlay(&self.shared_state, window_width)
+        if self.outputs.iter().any(|o| o.surface_id == id) {
+            view_overlay(&self.shared_state)
         } else {
             // Settings window
             settings::settings_view(
@@ -284,10 +279,11 @@ impl cosmic::Application for KiwiApp {
                 self.config.key_size = size;
                 self.pending_save = true;
                 
-                // Update shared state
+                // Update shared state - content resizes automatically within fixed-height window
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.key_size = size;
                 }
+                // No need to resize surfaces - height is fixed, width grows from anchor
             }
             Message::SetFadeDuration(duration) => {
                 self.config.fade_duration = duration;
@@ -328,31 +324,17 @@ impl cosmic::Application for KiwiApp {
                 if self.pending_save {
                     self.pending_save = false;
                     self.save_config();
-                    
-                    // Check if key_size changed significantly from when surfaces were created
-                    if (self.last_surface_key_size - self.config.key_size).abs() > 0.1 {
-                        self.last_surface_key_size = self.config.key_size;
-                        return self.recreate_layer_surfaces();
-                    }
+                    // Resize is now done immediately in SetKeySize, not here
                 }
             }
             Message::ConfigChanged(config) => {
                 log::info!("Config changed externally: enabled={}", config.enabled);
-                let size_changed = (self.last_surface_key_size - config.key_size).abs() > 0.1;
-                let position_changed = self.config.position != config.position;
-                
                 self.config = config.clone();
                 self.update_tray_state();
                 
-                // Update shared state
+                // Update shared state - layout positioning is handled in view
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.update_from_config(&config);
-                }
-                
-                // Recreate surfaces if needed
-                if size_changed || position_changed {
-                    self.last_surface_key_size = self.config.key_size;
-                    return self.recreate_layer_surfaces();
                 }
             }
             Message::WindowOpened(id) => {
@@ -431,23 +413,15 @@ impl KiwiApp {
     ) -> Task<cosmic::Action<Message>> {
         match event {
             OutputEvent::Created(info_opt) => {
-                let name = info_opt.and_then(|i| i.name);
+                let name = info_opt.as_ref().and_then(|i| i.name.clone());
                 log::info!("Output created: {:?}", name);
 
-                let (key_size, position) = self
-                    .shared_state
-                    .lock()
-                    .map(|s| (s.key_size, s.position))
-                    .unwrap_or((36.0, OverlayPosition::default()));
-
                 let surface_id = window::Id::unique();
-                let (task, width) =
-                    create_layer_surface_for_output(&wl_output, surface_id, key_size, position);
+                let task = create_layer_surface_for_output(&wl_output, surface_id);
                 self.outputs.push(OutputState {
                     output: wl_output.clone(),
                     surface_id,
                     name,
-                    width,
                 });
 
                 return task;
@@ -472,23 +446,15 @@ impl KiwiApp {
     fn recreate_layer_surfaces(&mut self) -> Task<cosmic::Action<Message>> {
         let mut tasks = Vec::new();
 
-        let (key_size, position) = self
-            .shared_state
-            .lock()
-            .map(|s| (s.key_size, s.position))
-            .unwrap_or((self.config.key_size, self.config.position));
-
-        // Destroy old surfaces and create new ones
+        // Destroy old surfaces and create new full-screen ones
         for output_state in &mut self.outputs {
             // Destroy old surface
             tasks.push(destroy_surface(output_state.surface_id));
 
-            // Create new surface with new ID
+            // Create new full-screen surface
             let new_id = window::Id::unique();
             output_state.surface_id = new_id;
-            let (task, width) =
-                create_layer_surface_for_output(&output_state.output, new_id, key_size, position);
-            output_state.width = width;
+            let task = create_layer_surface_for_output(&output_state.output, new_id);
             tasks.push(task);
         }
 

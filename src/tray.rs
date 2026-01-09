@@ -118,10 +118,10 @@ impl Tray for KiwiTray {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
-        // Left-click on tray icon opens settings
-        log::info!("Tray icon clicked - sending ShowSettings");
-        if let Err(e) = self.tx.send(TrayAction::ShowSettings) {
-            log::error!("Failed to send ShowSettings: {}", e);
+        // Left-click on tray icon toggles active state
+        log::info!("Tray icon clicked - toggling active state");
+        if let Err(e) = self.tx.send(TrayAction::ToggleActive) {
+            log::error!("Failed to send ToggleActive: {}", e);
         }
     }
 
@@ -129,9 +129,9 @@ impl Tray for KiwiTray {
         ksni::ToolTip {
             title: "Kiwi Keystroke Visualizer".to_string(),
             description: if self.active {
-                "Active - Keystrokes are being visualized".to_string()
+                "Active - Click to deactivate".to_string()
             } else {
-                "Inactive - Click to configure".to_string()
+                "Inactive - Click to activate".to_string()
             },
             icon_name: String::new(),
             icon_pixmap: Vec::new(),

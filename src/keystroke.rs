@@ -518,84 +518,49 @@ pub fn keystroke_widget<'a, M: 'a>(
         }
     }
 }
-
-// Margin/padding inside the window
-const WINDOW_MARGIN: f32 = 40.0;
-
-impl Keystroke {
-    /// Estimate the width of this keystroke widget
-    fn estimated_width(&self, key_size: f32) -> f32 {
-        if self.is_combination() {
-            // Combination: n keys (each key_size) + (n-1) plus separators (each PLUS_WIDTH)
-            let n = self.keys.len() as f32;
-            n * key_size + (n - 1.0) * PLUS_WIDTH
-        } else {
-            // Single key: fixed square size
-            key_size
-        }
-    }
-}
-
-/// Renders a row of keystrokes with alignment based on position.
-/// Filters out expired keystrokes and only includes ones that fit in available width.
+/// Renders a row of keystrokes.
+/// Filters out expired keystrokes and limits to MAX_VISIBLE keystrokes.
 pub fn keystrokes_row<'a, M: 'a + Clone>(
     keystrokes: &[Keystroke],
     key_size: f32,
     fade_duration: f32,
     palette_type: PaletteType,
-    window_width: f32,
     position: OverlayPosition,
 ) -> Element<'a, M> {
-    let available_width = window_width - WINDOW_MARGIN;
-    let mut total_width: f32 = 0.0;
-    let mut fitting_keystrokes: Vec<&Keystroke> = Vec::new();
+    const MAX_VISIBLE: usize = 10;
 
-    // Process from newest to oldest, skip expired, accumulate width
-    for keystroke in keystrokes.iter().rev() {
-        // Skip expired keystrokes
-        if keystroke.is_expired(fade_duration) {
-            continue;
-        }
+    // Filter non-expired keystrokes, newest first, limit count
+    let mut visible_keystrokes: Vec<&Keystroke> = keystrokes
+        .iter()
+        .rev()
+        .filter(|k| !k.is_expired(fade_duration))
+        .take(MAX_VISIBLE)
+        .collect();
 
-        let width = keystroke.estimated_width(key_size);
-        let gap = if fitting_keystrokes.is_empty() {
-            0.0
-        } else {
-            KEY_GAP
-        };
+    // Reverse so oldest is first (left side for left-aligned, right side for right-aligned)
+    visible_keystrokes.reverse();
 
-        if total_width + gap + width <= available_width {
-            total_width += gap + width;
-            fitting_keystrokes.push(keystroke);
-        } else {
-            break; // No more space
-        }
-    }
-
-    // Reverse so newest is on the appropriate side
-    fitting_keystrokes.reverse();
-
-    let children: Vec<Element<'a, M>> = fitting_keystrokes
+    let children: Vec<Element<'a, M>> = visible_keystrokes
         .into_iter()
         .map(|k| keystroke_widget(k, key_size, fade_duration, palette_type, true))
         .collect();
 
-    // Determine horizontal alignment based on position
-    let h_align = match position {
-        OverlayPosition::TopLeft | OverlayPosition::BottomLeft => iced::alignment::Horizontal::Left,
-        OverlayPosition::TopRight | OverlayPosition::BottomRight => {
-            iced::alignment::Horizontal::Right
-        }
-        OverlayPosition::BottomCenter => iced::alignment::Horizontal::Center,
+    // Determine if we need to reverse the order for right-aligned positions
+    // (newest should appear on the right edge)
+    let is_right_aligned = matches!(
+        position,
+        OverlayPosition::TopRight | OverlayPosition::BottomRight | OverlayPosition::BottomCenter
+    );
+
+    // For right-aligned: oldest on left, newest on right (natural order after reverse)
+    // For left-aligned: oldest on right, newest on left (need to reverse display)
+    let ordered_children = if is_right_aligned {
+        children
+    } else {
+        children.into_iter().rev().collect()
     };
 
-    widget::container(
-        widget::row::with_children(children)
-            .spacing(KEY_GAP)
-            .align_y(iced::Alignment::Start), // Align to top
-    )
-    .width(Length::Fill)
-    .align_x(h_align)
-    .align_y(iced::alignment::Vertical::Top)
-    .into()
+    widget::row::with_children(ordered_children)
+        .spacing(KEY_GAP)
+        .into()
 }

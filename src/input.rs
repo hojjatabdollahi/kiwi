@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use evdev::Key;
+use evdev::KeyCode;
 
 use crate::capture::{Axis, ButtonState, InputCapture, InputEvent, KeyState, SwipeDirection};
 use crate::keystroke::{KeyModifiers, Keystroke};
@@ -11,37 +11,37 @@ use crate::overlay::{push_history, SharedState};
 
 /// Convert key code to display string using evdev
 pub fn key_to_string(key: u32) -> Option<String> {
-    let evdev_key = Key::new(key as u16);
+    let evdev_key = KeyCode::new(key as u16);
     
     // Special keys with custom symbols/names
     match evdev_key {
         // Modifiers
-        Key::KEY_LEFTCTRL | Key::KEY_RIGHTCTRL => return Some("Ctrl".to_string()),
-        Key::KEY_LEFTALT | Key::KEY_RIGHTALT => return Some("Alt".to_string()),
-        Key::KEY_LEFTSHIFT | Key::KEY_RIGHTSHIFT => return Some("⇧".to_string()),
-        Key::KEY_LEFTMETA | Key::KEY_RIGHTMETA => return Some("Super".to_string()),
+        KeyCode::KEY_LEFTCTRL | KeyCode::KEY_RIGHTCTRL => return Some("Ctrl".to_string()),
+        KeyCode::KEY_LEFTALT | KeyCode::KEY_RIGHTALT => return Some("Alt".to_string()),
+        KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT => return Some("⇧".to_string()),
+        KeyCode::KEY_LEFTMETA | KeyCode::KEY_RIGHTMETA => return Some("Super".to_string()),
         
         // Special keys with symbols
-        Key::KEY_ENTER | Key::KEY_KPENTER => return Some("↵".to_string()),
-        Key::KEY_BACKSPACE => return Some("⌫".to_string()),
-        Key::KEY_SPACE => return Some("␣".to_string()),
-        Key::KEY_TAB => return Some("Tab".to_string()),
-        Key::KEY_ESC => return Some("Esc".to_string()),
-        Key::KEY_CAPSLOCK => return Some("Caps".to_string()),
+        KeyCode::KEY_ENTER | KeyCode::KEY_KPENTER => return Some("↵".to_string()),
+        KeyCode::KEY_BACKSPACE => return Some("⌫".to_string()),
+        KeyCode::KEY_SPACE => return Some("␣".to_string()),
+        KeyCode::KEY_TAB => return Some("Tab".to_string()),
+        KeyCode::KEY_ESC => return Some("Esc".to_string()),
+        KeyCode::KEY_CAPSLOCK => return Some("Caps".to_string()),
         
         // Arrow keys
-        Key::KEY_UP => return Some("↑".to_string()),
-        Key::KEY_DOWN => return Some("↓".to_string()),
-        Key::KEY_LEFT => return Some("←".to_string()),
-        Key::KEY_RIGHT => return Some("→".to_string()),
+        KeyCode::KEY_UP => return Some("↑".to_string()),
+        KeyCode::KEY_DOWN => return Some("↓".to_string()),
+        KeyCode::KEY_LEFT => return Some("←".to_string()),
+        KeyCode::KEY_RIGHT => return Some("→".to_string()),
         
         // Navigation
-        Key::KEY_HOME => return Some("Home".to_string()),
-        Key::KEY_END => return Some("End".to_string()),
-        Key::KEY_PAGEUP => return Some("PgUp".to_string()),
-        Key::KEY_PAGEDOWN => return Some("PgDn".to_string()),
-        Key::KEY_INSERT => return Some("Ins".to_string()),
-        Key::KEY_DELETE => return Some("Del".to_string()),
+        KeyCode::KEY_HOME => return Some("Home".to_string()),
+        KeyCode::KEY_END => return Some("End".to_string()),
+        KeyCode::KEY_PAGEUP => return Some("PgUp".to_string()),
+        KeyCode::KEY_PAGEDOWN => return Some("PgDn".to_string()),
+        KeyCode::KEY_INSERT => return Some("Ins".to_string()),
+        KeyCode::KEY_DELETE => return Some("Del".to_string()),
         
         _ => {}
     }
@@ -130,17 +130,17 @@ fn prettify_key_name(name: &str) -> Option<String> {
 
 /// Check if a key code is a modifier
 pub fn is_modifier(key: u32) -> bool {
-    let evdev_key = Key::new(key as u16);
+    let evdev_key = KeyCode::new(key as u16);
     matches!(
         evdev_key,
-        Key::KEY_LEFTCTRL
-            | Key::KEY_RIGHTCTRL
-            | Key::KEY_LEFTALT
-            | Key::KEY_RIGHTALT
-            | Key::KEY_LEFTSHIFT
-            | Key::KEY_RIGHTSHIFT
-            | Key::KEY_LEFTMETA
-            | Key::KEY_RIGHTMETA
+        KeyCode::KEY_LEFTCTRL
+            | KeyCode::KEY_RIGHTCTRL
+            | KeyCode::KEY_LEFTALT
+            | KeyCode::KEY_RIGHTALT
+            | KeyCode::KEY_LEFTSHIFT
+            | KeyCode::KEY_RIGHTSHIFT
+            | KeyCode::KEY_LEFTMETA
+            | KeyCode::KEY_RIGHTMETA
     )
 }
 

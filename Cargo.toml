@@ -28,7 +28,7 @@ cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", br
 input = "0.9"
 udev = "0.9"
 libc = "0.2"
-evdev = "0.12"
+evdev = "0.13.2"
 
 # Config
 serde = { version = "1.0", features = ["derive"] }
