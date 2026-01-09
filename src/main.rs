@@ -84,6 +84,7 @@ pub enum Message {
     SetPaletteIndex(usize),
     SetPosition(OverlayPosition),
     SetKeyDisplayMode(config::KeyDisplayMode),
+    SetHistoryCount(u8),
     SaveConfig,
     ConfigChanged(Config),
     // Overlay
@@ -125,6 +126,7 @@ impl cosmic::Application for KiwiApp {
             config.palette,
             config.position,
             config.key_display_mode,
+            config.history_count,
         )));
 
         // Always start input capture (it checks enabled state internally)
@@ -167,6 +169,7 @@ impl cosmic::Application for KiwiApp {
             self.config.palette,
             self.config.position,
             self.config.key_display_mode,
+            self.config.history_count,
             self.config.enabled,
         )
     }
@@ -183,6 +186,7 @@ impl cosmic::Application for KiwiApp {
                 self.config.palette,
                 self.config.position,
                 self.config.key_display_mode,
+                self.config.history_count,
                 self.config.enabled,
             )
         }
@@ -331,6 +335,15 @@ impl cosmic::Application for KiwiApp {
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.key_display_mode = mode;
+                }
+            }
+            Message::SetHistoryCount(count) => {
+                self.config.history_count = count;
+                self.save_config();
+                
+                // Update shared state
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.history_count = count;
                 }
             }
             Message::SaveConfig => {

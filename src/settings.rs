@@ -31,6 +31,7 @@ pub fn settings_view(
     palette: PaletteType,
     position: OverlayPosition,
     key_display_mode: KeyDisplayMode,
+    history_count: u8,
     is_active: bool,
 ) -> Element<'static, Message> {
     // Find current selection index
@@ -48,6 +49,7 @@ pub fn settings_view(
         1.0, // fade_duration (unused when fade disabled)
         palette,
         false, // fade_enabled = false for static preview
+        position, // Use current position setting for preview
     );
 
     // Checkerboard background for transparency preview
@@ -159,6 +161,19 @@ pub fn settings_view(
                 .push(
                     widget::slider(1.0..=10.0, fade_duration, Message::SetFadeDuration)
                         .width(Length::Fill),
+                ),
+        )
+        // History count slider
+        .push(
+            widget::row()
+                .spacing(10)
+                .align_y(cosmic::iced::Alignment::Center)
+                .push(widget::text::body(format!("History: {}", history_count)))
+                .push(
+                    widget::slider(1.0..=10.0, history_count as f32, |v| {
+                        Message::SetHistoryCount(v as u8)
+                    })
+                    .width(Length::Fill),
                 ),
         )
         .push(widget::divider::horizontal::default())

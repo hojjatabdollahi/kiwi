@@ -31,6 +31,8 @@ pub struct SharedState {
     pub position: OverlayPosition,
     /// Key display mode (typed character vs physical key)
     pub key_display_mode: crate::config::KeyDisplayMode,
+    /// Maximum number of keystroke widgets to show
+    pub history_count: u8,
     /// Current modifier state (live)
     pub modifiers: KeyModifiers,
     /// Peak modifiers held during current modifier session (for showing full combo on release)
@@ -54,6 +56,7 @@ impl SharedState {
         palette: PaletteType,
         position: OverlayPosition,
         key_display_mode: crate::config::KeyDisplayMode,
+        history_count: u8,
     ) -> Self {
         Self {
             enabled,
@@ -62,6 +65,7 @@ impl SharedState {
             palette,
             position,
             key_display_mode,
+            history_count,
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
             current_key: None,
@@ -79,6 +83,7 @@ impl SharedState {
         self.palette = config.palette;
         self.position = config.position;
         self.key_display_mode = config.key_display_mode;
+        self.history_count = config.history_count;
     }
 
     /// Clean up expired keystrokes
@@ -97,6 +102,7 @@ impl Default for SharedState {
             palette: PaletteType::default(),
             position: OverlayPosition::default(),
             key_display_mode: crate::config::KeyDisplayMode::default(),
+            history_count: 5,
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
             current_key: None,
@@ -166,7 +172,7 @@ pub fn destroy_surface(surface_id: window::Id) -> cosmic::iced::Task<cosmic::Act
 
 /// Render the overlay view (full-screen, with layout positioning)
 pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static, Message> {
-    let (keystrokes, key_size, fade_duration, palette, position) = state
+    let (keystrokes, key_size, fade_duration, palette, position, history_count) = state
         .lock()
         .map(|s| {
             if !s.enabled {
@@ -176,6 +182,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
                     s.fade_duration,
                     s.palette,
                     s.position,
+                    s.history_count,
                 );
             }
 
@@ -214,7 +221,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
                 }
             }
 
-            (display, s.key_size, s.fade_duration, s.palette, s.position)
+            (display, s.key_size, s.fade_duration, s.palette, s.position, s.history_count)
         })
         .unwrap_or((
             Vec::new(),
@@ -222,6 +229,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
             5.0,
             PaletteType::default(),
             OverlayPosition::default(),
+            5,
         ));
 
     // Determine vertical and horizontal alignment based on position
@@ -253,17 +261,30 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
         // Empty widget when no keystrokes
         cosmic::widget::Space::new(0, 0).into()
     } else {
-        // Show keystrokes row (without its own container since we'll position it here)
-        keystrokes_row(&keystrokes, key_size, fade_duration, palette, position)
+        // Show keystrokes row
+        keystrokes_row(
+            &keystrokes,
+            key_size,
+            fade_duration,
+            palette,
+            position,
+            history_count as usize,
+        )
     };
 
-    // For BottomCenter: we want the right edge of the content at the center
-    // Use a row with a spacer that takes up half the screen, then the content
+    // For BottomCenter: newest key at center, older keys grow to the left
+    // Use a row with two halves: [left half with content aligned right] [right half empty spacer]
+    // This puts the rightmost key at screen center
     let positioned_content: cosmic::Element<'static, Message> = if position == OverlayPosition::BottomCenter {
         cosmic::widget::row()
-            .push(cosmic::widget::Space::with_width(cosmic::iced::Length::Fill))
-            .push(content)
-            .push(cosmic::widget::Space::with_width(cosmic::iced::Length::Fill))
+            // Left half: content aligned to the right edge (screen center)
+            .push(
+                cosmic::widget::container(content)
+                    .width(cosmic::iced::Length::FillPortion(1))
+                    .align_x(cosmic::iced::alignment::Horizontal::Right)
+            )
+            // Right half: empty spacer (takes up right 50% of screen)
+            .push(cosmic::widget::Space::with_width(cosmic::iced::Length::FillPortion(1)))
             .into()
     } else {
         content

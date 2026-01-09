@@ -22,8 +22,7 @@ const ICON_SUPER: &[u8] = include_bytes!("../data/icons/kiwi-super-symbolic.svg"
 const ICON_ESCAPE: &[u8] = include_bytes!("../data/icons/kiwi-escape-symbolic.svg");
 const ICON_LEFT_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-left-click-symbolic.svg");
 const ICON_RIGHT_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-right-click-symbolic.svg");
-const ICON_MIDDLE_CLICK: &[u8] =
-    include_bytes!("../data/icons/kiwi-middle-click-symbolic.svg");
+const ICON_MIDDLE_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-middle-click-symbolic.svg");
 const ICON_SCROLL_UP: &[u8] = include_bytes!("../data/icons/kiwi-scroll-up-symbolic.svg");
 const ICON_SCROLL_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-scroll-down-symbolic.svg");
 // Touchpad gestures
@@ -312,7 +311,7 @@ fn key_content_with_emblem<'a, M: 'a>(
 
     if pressed {
         let emblem_size = key_size * 0.22; // Smaller emblem
-        // Use stack to overlay emblem in bottom-right corner without changing layout
+                                           // Use stack to overlay emblem in bottom-right corner without changing layout
         cosmic::iced::widget::stack![
             // Main content centered
             widget::container(content)
@@ -334,6 +333,65 @@ fn key_content_with_emblem<'a, M: 'a>(
     }
 }
 
+/// Wraps a widget with a badge area.
+/// Badge is above for bottom positions, below for top positions.
+/// Always reserves space for the badge to prevent layout shifts when count changes.
+fn wrap_with_badge_area<'a, M: 'a>(
+    widget: Element<'a, M>,
+    count: u32,
+    key_size: f32,
+    count_color: Color,
+    count_bg: Color,
+    position: OverlayPosition,
+) -> Element<'a, M> {
+    let count_font_size = key_size * 0.3;
+    // Badge height = font + padding (approximately)
+    let badge_height = count_font_size + 4.0;
+    let spacing = (key_size * 0.05) as u16;
+
+    // Always create a column with widget + badge area
+    let badge: Element<'a, M> = if count > 1 {
+        widget::container(
+            text::Text::new(format!("x{}", count))
+                .size(count_font_size)
+                .class(cosmic::theme::Text::Color(count_color))
+                .align_x(iced::alignment::Horizontal::Center),
+        )
+        .padding([2, 6])
+        .class(cosmic::theme::Container::custom(move |_| {
+            container::Style {
+                background: Some(Background::Color(count_bg)),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: (count_font_size * 0.6).into(),
+                },
+                ..Default::default()
+            }
+        }))
+        .into()
+    } else {
+        // Invisible placeholder to reserve space
+        widget::Space::new(Length::Shrink, Length::Fixed(badge_height)).into()
+    };
+
+    // For bottom positions, badge goes above; for top positions, badge goes below
+    let is_bottom = matches!(
+        position,
+        OverlayPosition::BottomLeft | OverlayPosition::BottomRight | OverlayPosition::BottomCenter
+    );
+
+    let mut col = widget::column()
+        .align_x(iced::Alignment::Center)
+        .spacing(spacing);
+    if is_bottom {
+        col = col.push(badge).push(widget);
+    } else {
+        col = col.push(widget).push(badge);
+    }
+    col.into()
+}
+
 /// Renders a keystroke widget with opacity based on age
 ///
 /// - Single key: square with border
@@ -345,6 +403,7 @@ pub fn keystroke_widget<'a, M: 'a>(
     fade_duration: f32,
     palette_type: PaletteType,
     fade_enabled: bool,
+    position: OverlayPosition,
 ) -> Element<'a, M> {
     let opacity = if fade_enabled {
         keystroke.opacity(fade_duration)
@@ -430,37 +489,15 @@ pub fn keystroke_widget<'a, M: 'a>(
             }
         }));
 
-        // Add count badge if repeated
-        if keystroke.count > 1 {
-            let count_font_size = key_size * 0.3;
-            let count_bg = palette.count_bg;
-            let badge = widget::container(
-                text::Text::new(format!("x{}", keystroke.count))
-                    .size(count_font_size)
-                    .class(cosmic::theme::Text::Color(count_color))
-                    .align_x(iced::alignment::Horizontal::Center),
-            )
-            .padding([2, 6]) // vertical, horizontal padding
-            .class(cosmic::theme::Container::custom(move |_| {
-                container::Style {
-                    background: Some(Background::Color(count_bg)),
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: (count_font_size * 0.6).into(), // pill/oval shape
-                    },
-                    ..Default::default()
-                }
-            }));
-            widget::column()
-                .push(combo_widget)
-                .push(badge)
-                .align_x(iced::Alignment::Center)
-                .spacing((key_size * 0.05) as u16)
-                .into()
-        } else {
-            combo_widget.into()
-        }
+        // Wrap with badge area (always reserve space for badge to prevent relayout)
+        wrap_with_badge_area(
+            combo_widget.into(),
+            keystroke.count,
+            key_size,
+            count_color,
+            palette.count_bg,
+            position,
+        )
     } else {
         // Single key: square with border
         let key_widget = widget::container(key_content_with_emblem(
@@ -485,56 +522,33 @@ pub fn keystroke_widget<'a, M: 'a>(
             }
         }));
 
-        // Add count badge if repeated
-        if keystroke.count > 1 {
-            let count_font_size = key_size * 0.3;
-            let count_bg = palette.count_bg;
-            let badge = widget::container(
-                text::Text::new(format!("x{}", keystroke.count))
-                    .size(count_font_size)
-                    .class(cosmic::theme::Text::Color(count_color))
-                    .align_x(iced::alignment::Horizontal::Center),
-            )
-            .padding([2, 6]) // vertical, horizontal padding
-            .class(cosmic::theme::Container::custom(move |_| {
-                container::Style {
-                    background: Some(Background::Color(count_bg)),
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: (count_font_size * 0.6).into(), // pill/oval shape
-                    },
-                    ..Default::default()
-                }
-            }));
-            widget::column()
-                .push(key_widget)
-                .push(badge)
-                .align_x(iced::Alignment::Center)
-                .spacing((key_size * 0.05) as u16)
-                .into()
-        } else {
-            key_widget.into()
-        }
+        // Wrap with badge area (always reserve space for badge to prevent relayout)
+        wrap_with_badge_area(
+            key_widget.into(),
+            keystroke.count,
+            key_size,
+            count_color,
+            palette.count_bg,
+            position,
+        )
     }
 }
 /// Renders a row of keystrokes.
-/// Filters out expired keystrokes and limits to MAX_VISIBLE keystrokes.
+/// Filters out expired keystrokes and limits to history_count keystrokes.
 pub fn keystrokes_row<'a, M: 'a + Clone>(
     keystrokes: &[Keystroke],
     key_size: f32,
     fade_duration: f32,
     palette_type: PaletteType,
     position: OverlayPosition,
+    history_count: usize,
 ) -> Element<'a, M> {
-    const MAX_VISIBLE: usize = 10;
-
     // Filter non-expired keystrokes, newest first, limit count
     let mut visible_keystrokes: Vec<&Keystroke> = keystrokes
         .iter()
         .rev()
         .filter(|k| !k.is_expired(fade_duration))
-        .take(MAX_VISIBLE)
+        .take(history_count)
         .collect();
 
     // Reverse so oldest is first (left side for left-aligned, right side for right-aligned)
@@ -542,7 +556,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
 
     let children: Vec<Element<'a, M>> = visible_keystrokes
         .into_iter()
-        .map(|k| keystroke_widget(k, key_size, fade_duration, palette_type, true))
+        .map(|k| keystroke_widget(k, key_size, fade_duration, palette_type, true, position))
         .collect();
 
     // Determine if we need to reverse the order for right-aligned positions
@@ -550,6 +564,11 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     let is_right_aligned = matches!(
         position,
         OverlayPosition::TopRight | OverlayPosition::BottomRight | OverlayPosition::BottomCenter
+    );
+
+    let is_bottom = matches!(
+        position,
+        OverlayPosition::BottomLeft | OverlayPosition::BottomRight | OverlayPosition::BottomCenter
     );
 
     // For right-aligned: oldest on left, newest on right (natural order after reverse)
@@ -562,5 +581,10 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
 
     widget::row::with_children(ordered_children)
         .spacing(KEY_GAP)
+        .align_y(if is_bottom {
+            iced::Alignment::End
+        } else {
+            iced::Alignment::Start
+        })
         .into()
 }
