@@ -274,6 +274,16 @@ impl cosmic::Application for KiwiApp {
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.enabled = active;
+                    
+                    // When disabling, clear all input state to prevent stale modifiers
+                    if !active {
+                        state.modifiers = keystroke::KeyModifiers::default();
+                        state.peak_modifiers = keystroke::KeyModifiers::default();
+                        state.current_key = None;
+                        state.current_mouse = None;
+                        state.key_pressed_with_modifiers = false;
+                        state.history.clear();
+                    }
                 }
                 
                 // If enabling and input capture isn't running, start it
