@@ -42,7 +42,8 @@ pub fn settings_view(
 
     // Sample keystroke preview (scales with slider, cap at 250 for window)
     let preview_size = key_size.min(250.0);
-    let sample_keystroke = Keystroke::single("Alt", false);
+    let mut sample_keystroke = Keystroke::single("Alt", false);
+    sample_keystroke.count = 2; // Show multiplier in preview
     let preview = keystroke_widget::<Message>(
         &sample_keystroke,
         preview_size,
@@ -139,7 +140,7 @@ pub fn settings_view(
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(widget::tooltip(
-                    widget::slider(32.0..=256.0, key_size, Message::SetKeySize)
+                    widget::slider(32.0..=160.0, key_size, Message::SetKeySize)
                         .width(Length::Fill),
                     "Size",
                     widget::tooltip::Position::Bottom,

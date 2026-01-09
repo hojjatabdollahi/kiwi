@@ -112,6 +112,22 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         let accent = cosmic::iced::Color::from(cosmic_theme.accent_color());
         let radius = cosmic_theme.radius_xs();
 
+        // Draw background with border using theme colors
+        let bg_color = cosmic::iced::Color::from(cosmic_theme.bg_component_color());
+        let border_color = cosmic::iced::Color::from(cosmic_theme.bg_divider());
+        renderer.fill_quad(
+            Quad {
+                bounds,
+                border: Border {
+                    radius: radius.into(),
+                    width: 1.0,
+                    color: border_color,
+                },
+                shadow: cosmic::iced_core::Shadow::default(),
+            },
+            Background::Color(bg_color),
+        );
+
         let base_color = cosmic::iced::Color::from_rgba(0.4, 0.4, 0.4, 0.6);
         let hover_color = cosmic::iced::Color::from_rgba(0.6, 0.6, 0.6, 0.8);
 
@@ -120,8 +136,15 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
             .position()
             .and_then(|pos| self.get_region(pos.x, pos.y, bounds));
 
+        let padding = 8.0;
         let corner_size = 18.0;
         let thickness = 6.0;
+        
+        // Inner bounds after padding
+        let inner_x = bounds.x + padding;
+        let inner_y = bounds.y + padding;
+        let inner_width = bounds.width - padding * 2.0;
+        let inner_height = bounds.height - padding * 2.0;
 
         // Helper to get color for a position
         let get_color = |pos: OverlayPosition| -> cosmic::iced::Color {
@@ -140,8 +163,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         renderer.fill_quad(
             Quad {
                 bounds: cosmic::iced_core::Rectangle {
-                    x: bounds.x,
-                    y: bounds.y,
+                    x: inner_x,
+                    y: inner_y,
                     width: thickness,
                     height: corner_size,
                 },
@@ -158,8 +181,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         renderer.fill_quad(
             Quad {
                 bounds: cosmic::iced_core::Rectangle {
-                    x: bounds.x + thickness,
-                    y: bounds.y,
+                    x: inner_x + thickness,
+                    y: inner_y,
                     width: corner_size - thickness,
                     height: thickness,
                 },
@@ -179,8 +202,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         renderer.fill_quad(
             Quad {
                 bounds: cosmic::iced_core::Rectangle {
-                    x: bounds.x + bounds.width - thickness,
-                    y: bounds.y,
+                    x: inner_x + inner_width - thickness,
+                    y: inner_y,
                     width: thickness,
                     height: corner_size,
                 },
@@ -197,8 +220,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         renderer.fill_quad(
             Quad {
                 bounds: cosmic::iced_core::Rectangle {
-                    x: bounds.x + bounds.width - corner_size,
-                    y: bounds.y,
+                    x: inner_x + inner_width - corner_size,
+                    y: inner_y,
                     width: corner_size - thickness,
                     height: thickness,
                 },
@@ -218,8 +241,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         renderer.fill_quad(
             Quad {
                 bounds: cosmic::iced_core::Rectangle {
-                    x: bounds.x,
-                    y: bounds.y + bounds.height - corner_size,
+                    x: inner_x,
+                    y: inner_y + inner_height - corner_size,
                     width: thickness,
                     height: corner_size,
                 },
@@ -236,8 +259,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         renderer.fill_quad(
             Quad {
                 bounds: cosmic::iced_core::Rectangle {
-                    x: bounds.x + thickness,
-                    y: bounds.y + bounds.height - thickness,
+                    x: inner_x + thickness,
+                    y: inner_y + inner_height - thickness,
                     width: corner_size - thickness,
                     height: thickness,
                 },
@@ -257,8 +280,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         renderer.fill_quad(
             Quad {
                 bounds: cosmic::iced_core::Rectangle {
-                    x: bounds.x + bounds.width - thickness,
-                    y: bounds.y + bounds.height - corner_size,
+                    x: inner_x + inner_width - thickness,
+                    y: inner_y + inner_height - corner_size,
                     width: thickness,
                     height: corner_size,
                 },
@@ -275,8 +298,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         renderer.fill_quad(
             Quad {
                 bounds: cosmic::iced_core::Rectangle {
-                    x: bounds.x + bounds.width - corner_size,
-                    y: bounds.y + bounds.height - thickness,
+                    x: inner_x + inner_width - corner_size,
+                    y: inner_y + inner_height - thickness,
                     width: corner_size - thickness,
                     height: thickness,
                 },
@@ -292,13 +315,13 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
 
         // Bottom center (underscore _)
         let bc_color = get_color(OverlayPosition::BottomCenter);
-        let center_width = bounds.width * 0.25;
-        let center_x = bounds.x + (bounds.width - center_width) / 2.0;
+        let center_width = inner_width * 0.25;
+        let center_x = inner_x + (inner_width - center_width) / 2.0;
         renderer.fill_quad(
             Quad {
                 bounds: cosmic::iced_core::Rectangle {
                     x: center_x,
-                    y: bounds.y + bounds.height - thickness,
+                    y: inner_y + inner_height - thickness,
                     width: center_width,
                     height: thickness,
                 },
