@@ -20,6 +20,12 @@ const ICON_SPACE: &[u8] = include_bytes!("../data/icons/kiwi-space-symbolic.svg"
 const ICON_CAPS: &[u8] = include_bytes!("../data/icons/kiwi-capslock-symbolic.svg");
 const ICON_SUPER: &[u8] = include_bytes!("../data/icons/kiwi-super-symbolic.svg");
 const ICON_ESCAPE: &[u8] = include_bytes!("../data/icons/kiwi-escape-symbolic.svg");
+const ICON_DELETE: &[u8] = include_bytes!("../data/icons/kiwi-del-symbolic.svg");
+const ICON_PRTSCR: &[u8] = include_bytes!("../data/icons/kiwi-prtscr-symbolic.svg");
+const ICON_HOME: &[u8] = include_bytes!("../data/icons/kiwi-home-symbolic.svg");
+const ICON_END: &[u8] = include_bytes!("../data/icons/kiwi-end-symbolic.svg");
+const ICON_PGUP: &[u8] = include_bytes!("../data/icons/kiwi-pgup-symbolic.svg");
+const ICON_PGDOWN: &[u8] = include_bytes!("../data/icons/kiwi-pgdown-symbolic.svg");
 const ICON_LEFT_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-left-click-symbolic.svg");
 const ICON_RIGHT_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-right-click-symbolic.svg");
 const ICON_MIDDLE_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-middle-click-symbolic.svg");
@@ -231,6 +237,12 @@ fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
         "Caps" => Some((ICON_CAPS, true)),
         "Super" => Some((ICON_SUPER, false)), // Keep original colors
         "Esc" => Some((ICON_ESCAPE, true)),
+        "Del" => Some((ICON_DELETE, true)),
+        "PrtSc" => Some((ICON_PRTSCR, true)),
+        "Home" => Some((ICON_HOME, true)),
+        "End" => Some((ICON_END, true)),
+        "PgUp" => Some((ICON_PGUP, true)),
+        "PgDn" => Some((ICON_PGDOWN, true)),
         // Mouse
         "LClick" => Some((ICON_LEFT_CLICK, true)),
         "RClick" => Some((ICON_RIGHT_CLICK, true)),

@@ -93,6 +93,7 @@ pub fn key_to_string(key: u32) -> Option<String> {
         KeyCode::KEY_PAGEDOWN => return Some("PgDn".to_string()),
         KeyCode::KEY_INSERT => return Some("Ins".to_string()),
         KeyCode::KEY_DELETE => return Some("Del".to_string()),
+        KeyCode::KEY_SYSRQ => return Some("PrtSc".to_string()),
 
         _ => {}
     }

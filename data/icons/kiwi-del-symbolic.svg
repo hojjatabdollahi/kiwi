@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   id="mdi-keyboard-esc"
+   viewBox="0 0 24 24"
+   version="1.1"
+   sodipodi:docname="kiwi-del-symbolic.svg"
+   inkscape:version="1.4.3 (0d15f75042, 2025-12-25)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs1" />
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="9.3565491"
+     inkscape:cx="15.336851"
+     inkscape:cy="22.925119"
+     inkscape:window-width="1805"
+     inkscape:window-height="1134"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="mdi-keyboard-esc" />
+  <g
+     id="g4"
+     transform="matrix(0.29151903,0,0,0.31120437,-18.990935,-28.324647)">
+    <path
+       style="font-weight:bold;font-size:53.3333px;line-height:1.4;font-family:'Gemunu Libre';-inkscape-font-specification:'Gemunu Libre Bold'"
+       d="M 87.158588,118.14135 H 76.918594 v 23.51999 h 10.239994 q 0.746666,0 0.746666,-0.74667 v -22.02665 q 0,-0.74667 -0.746666,-0.74667 z m -16.47999,28.69332 v -33.86665 l 14.933324,-0.26666 q 4.373331,-0.10667 6.506663,1.81333 2.133332,1.92 2.133332,6.02666 v 18.71999 q 0,4.10667 -2.186665,6.02667 -2.133332,1.86666 -6.559996,1.81333 z m 50.240012,0 h -19.94665 v -33.86665 h 19.67998 v 5.44 h -14.34665 l 0.90666,-0.90666 v 10.34666 l -0.90666,-0.90667 h 13.33332 v 5.38666 h -13.33332 l 0.90666,-0.90666 v 10.87999 l -0.90666,-0.90667 h 14.61332 z m 23.62663,-5.44 v 5.44 h -18.34665 v -33.86665 h 6.23999 v 29.38665 l -0.90666,-0.96 z"
+       id="text1"
+       aria-label="DEL" />
+  </g>
+</svg>
