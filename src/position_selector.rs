@@ -139,7 +139,7 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         let padding = 8.0;
         let corner_size = 18.0;
         let thickness = 6.0;
-        
+
         // Inner bounds after padding
         let inner_x = bounds.x + padding;
         let inner_y = bounds.y + padding;

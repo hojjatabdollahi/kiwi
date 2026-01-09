@@ -321,12 +321,10 @@ impl InputCapture {
                                                 } else {
                                                     SwipeDirection::Down
                                                 }
+                                            } else if dx < 0.0 {
+                                                SwipeDirection::Left
                                             } else {
-                                                if dx < 0.0 {
-                                                    SwipeDirection::Left
-                                                } else {
-                                                    SwipeDirection::Right
-                                                }
+                                                SwipeDirection::Right
                                             };
                                             results.push(InputEvent::Swipe {
                                                 finger_count: self.swipe_state.finger_count,
@@ -342,23 +340,20 @@ impl InputCapture {
                         }
                         GestureEvent::Hold(hold) => {
                             use input::event::gesture::{GestureEndEvent, GestureHoldEvent};
-                            match hold {
-                                GestureHoldEvent::End(ref end_event) => {
-                                    let finger_count = end_event.finger_count();
-                                    let cancelled = end_event.cancelled();
-                                    log::debug!(
-                                        "Hold end: {} fingers, cancelled={}",
-                                        finger_count,
-                                        cancelled
-                                    );
+                            if let GestureHoldEvent::End(ref end_event) = hold {
+                                let finger_count = end_event.finger_count();
+                                let cancelled = end_event.cancelled();
+                                log::debug!(
+                                    "Hold end: {} fingers, cancelled={}",
+                                    finger_count,
+                                    cancelled
+                                );
 
-                                    // If not cancelled, it was a clean tap-like gesture
-                                    // (user lifted fingers without swiping)
-                                    if !cancelled && finger_count >= 3 {
-                                        results.push(InputEvent::Hold { finger_count });
-                                    }
+                                // If not cancelled, it was a clean tap-like gesture
+                                // (user lifted fingers without swiping)
+                                if !cancelled && finger_count >= 3 {
+                                    results.push(InputEvent::Hold { finger_count });
                                 }
-                                _ => {}
                             }
                         }
                         _ => {} // Ignore pinch

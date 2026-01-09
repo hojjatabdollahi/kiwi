@@ -38,6 +38,9 @@ cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
 # Image processing (for tray icon)
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+# Open URLs in browser
+open = "5"
+
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic"
 default-features = false

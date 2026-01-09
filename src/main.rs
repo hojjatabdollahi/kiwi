@@ -12,19 +12,36 @@ mod tray;
 use std::any::TypeId;
 use std::sync::{Arc, Mutex};
 
-use crossbeam_channel::{Receiver as CbReceiver, Sender as CbSender};
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
-use cosmic::iced::{window, Subscription};
 use cosmic::iced::Size;
+use cosmic::iced::{window, Subscription};
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::iced_futures::event::listen_with;
 use cosmic::iced_futures::futures::{SinkExt, StreamExt};
 use cosmic::prelude::*;
 use cosmic::widget;
+use crossbeam_channel::{Receiver as CbReceiver, Sender as CbSender};
 use wayland_client::protocol::wl_output::WlOutput;
 
-use config::{Config, OverlayPosition, PaletteType, APP_ID};
-use overlay::{create_layer_surface_for_output, destroy_surface, view_overlay, OutputState, SharedState};
+use config::{Config, OverlayPosition, PaletteType, APP_ID, APP_VERSION};
+use overlay::{
+    create_layer_surface_for_output, destroy_surface, view_overlay, OutputState, SharedState,
+};
+
+/// Context pages for the context drawer
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum ContextPage {
+    #[default]
+    About,
+}
+
+impl ContextPage {
+    fn title(&self) -> &'static str {
+        match self {
+            Self::About => "About",
+        }
+    }
+}
 
 fn main() -> cosmic::iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -33,14 +50,15 @@ fn main() -> cosmic::iced::Result {
 
     let settings = cosmic::app::Settings::default()
         .no_main_window(true) // Start with no window - tray only
-        .size_limits(cosmic::iced::Limits::NONE.min_width(350.0).min_height(400.0))
+        .size_limits(
+            cosmic::iced::Limits::NONE
+                .min_width(350.0)
+                .min_height(400.0),
+        )
         .size(Size::new(400.0, 550.0))
         .exit_on_close(false); // Don't exit when window closes - tray stays
 
-    cosmic::app::run::<KiwiApp>(
-        settings,
-        Flags { tray_tx, tray_rx },
-    )
+    cosmic::app::run::<KiwiApp>(settings, Flags { tray_tx, tray_rx })
 }
 
 #[derive(Clone)]
@@ -64,9 +82,12 @@ struct KiwiApp {
     shared_state: Arc<Mutex<SharedState>>,
     /// Wayland outputs with layer surfaces
     outputs: Vec<OutputState>,
+    /// Current context page for context drawer
+    context_page: ContextPage,
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Message {
     // Window actions
     WindowClosed(window::Id),
@@ -87,6 +108,9 @@ pub enum Message {
     SetHistoryCount(u8),
     SaveConfig,
     ConfigChanged(Config),
+    // Context drawer
+    ToggleContextPage(ContextPage),
+    OpenUrl(String),
     // Overlay
     OutputEvent(OutputEvent, WlOutput),
     Tick,
@@ -107,10 +131,7 @@ impl cosmic::Application for KiwiApp {
         &mut self.core
     }
 
-    fn init(
-        core: cosmic::Core,
-        flags: Self::Flags,
-    ) -> (Self, Task<cosmic::Action<Self::Message>>) {
+    fn init(core: cosmic::Core, flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
         // Load config
         let config_handler = cosmic_config::Config::new(APP_ID, Config::VERSION).ok();
         let config = config_handler
@@ -145,6 +166,7 @@ impl cosmic::Application for KiwiApp {
             tray_handle: Some(tray_handle),
             shared_state,
             outputs: Vec::new(),
+            context_page: ContextPage::default(),
         };
 
         (app, Task::none())
@@ -156,6 +178,28 @@ impl cosmic::Application for KiwiApp {
 
     fn header_center(&self) -> Vec<Element<'_, Self::Message>> {
         vec![widget::text::title3("Kiwi Settings").into()]
+    }
+
+    fn header_end(&self) -> Vec<Element<'_, Self::Message>> {
+        vec![
+            widget::button::icon(widget::icon::from_name("help-about-symbolic"))
+                .on_press(Message::ToggleContextPage(ContextPage::About))
+                .into(),
+        ]
+    }
+
+    fn context_drawer(&self) -> Option<cosmic::app::ContextDrawer<'_, Self::Message>> {
+        if !self.core.window.show_context {
+            return None;
+        }
+
+        Some(match self.context_page {
+            ContextPage::About => cosmic::app::context_drawer(
+                self.about(),
+                Message::ToggleContextPage(ContextPage::About),
+            )
+            .title(self.context_page.title()),
+        })
     }
 
     fn on_close_requested(&self, id: window::Id) -> Option<Message> {
@@ -247,7 +291,7 @@ impl cosmic::Application for KiwiApp {
                     self.core_mut().set_main_window_id(None);
                     return cosmic::iced::window::close(id);
                 }
-                
+
                 // No window exists, open a new one
                 let settings = window::Settings {
                     size: Size::new(400.0, 550.0),
@@ -270,11 +314,11 @@ impl cosmic::Application for KiwiApp {
                 self.config.enabled = active;
                 self.save_config();
                 self.update_tray_state();
-                
+
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.enabled = active;
-                    
+
                     // When disabling, clear all input state to prevent stale modifiers
                     if !active {
                         state.modifiers = keystroke::KeyModifiers::default();
@@ -285,7 +329,7 @@ impl cosmic::Application for KiwiApp {
                         state.history.clear();
                     }
                 }
-                
+
                 // If enabling and input capture isn't running, start it
                 if active {
                     // Input capture is already spawned at init - just enable in state
@@ -297,7 +341,7 @@ impl cosmic::Application for KiwiApp {
             Message::SetKeySize(size) => {
                 self.config.key_size = size;
                 self.pending_save = true;
-                
+
                 // Update shared state - content resizes automatically within fixed-height window
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.key_size = size;
@@ -307,7 +351,7 @@ impl cosmic::Application for KiwiApp {
             Message::SetFadeDuration(duration) => {
                 self.config.fade_duration = duration;
                 self.pending_save = true;
-                
+
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.fade_duration = duration;
@@ -317,7 +361,7 @@ impl cosmic::Application for KiwiApp {
                 if let Some(palette) = PaletteType::ALL.get(index) {
                     self.config.palette = *palette;
                     self.save_config();
-                    
+
                     // Update shared state
                     if let Ok(mut state) = self.shared_state.lock() {
                         state.palette = *palette;
@@ -328,12 +372,12 @@ impl cosmic::Application for KiwiApp {
                 let old_position = self.config.position;
                 self.config.position = position;
                 self.save_config();
-                
+
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.position = position;
                 }
-                
+
                 // Recreate layer surfaces if position changed
                 if old_position != position {
                     return self.recreate_layer_surfaces();
@@ -342,7 +386,7 @@ impl cosmic::Application for KiwiApp {
             Message::SetKeyDisplayMode(mode) => {
                 self.config.key_display_mode = mode;
                 self.save_config();
-                
+
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.key_display_mode = mode;
@@ -351,7 +395,7 @@ impl cosmic::Application for KiwiApp {
             Message::SetHistoryCount(count) => {
                 self.config.history_count = count;
                 self.save_config();
-                
+
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.history_count = count;
@@ -368,7 +412,7 @@ impl cosmic::Application for KiwiApp {
                 log::info!("Config changed externally: enabled={}", config.enabled);
                 self.config = config.clone();
                 self.update_tray_state();
-                
+
                 // Update shared state - layout positioning is handled in view
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.update_from_config(&config);
@@ -393,6 +437,21 @@ impl cosmic::Application for KiwiApp {
                 tray::TrayAction::ToggleActive => return self.update(Message::TrayToggleActive),
                 tray::TrayAction::Quit => return self.update(Message::TrayQuit),
             },
+            Message::ToggleContextPage(context_page) => {
+                if self.context_page == context_page {
+                    // Close the context drawer if the toggled context page is the same
+                    self.core.window.show_context = !self.core.window.show_context;
+                } else {
+                    // Open the context drawer to display the requested context page
+                    self.context_page = context_page;
+                    self.core.window.show_context = true;
+                }
+            }
+            Message::OpenUrl(url) => {
+                if let Err(e) = open::that(&url) {
+                    log::error!("Failed to open URL {}: {}", url, e);
+                }
+            }
         }
         Task::none()
     }
@@ -426,6 +485,49 @@ fn tray_subscription(rx: CbReceiver<tray::TrayAction>) -> Subscription<Message> 
 }
 
 impl KiwiApp {
+    fn about(&self) -> Element<'_, Message> {
+        use cosmic::iced_widget::svg;
+
+        let cosmic_theme = self.core.system_theme().cosmic();
+        let spacing = cosmic_theme.space_xxs();
+
+        // Kiwi logo
+        let logo_bytes = include_bytes!("../data/icons/kiwi-on.svg");
+        let logo = cosmic::iced_widget::Svg::new(svg::Handle::from_memory(logo_bytes.as_slice()))
+            .width(cosmic::iced::Length::Fixed(128.0))
+            .height(cosmic::iced::Length::Fixed(128.0));
+
+        widget::column()
+            .spacing(spacing)
+            .push(logo)
+            .push(widget::Space::with_height(cosmic::iced::Length::Fixed(
+                10.0,
+            )))
+            .push(widget::text::title1("Kiwi"))
+            .push(widget::text::body(format!("Version {}", APP_VERSION)))
+            .push(widget::Space::with_height(cosmic::iced::Length::Fixed(
+                10.0,
+            )))
+            .push(widget::text::body("A keystroke visualizer for COSMIC DE"))
+            .push(widget::Space::with_height(cosmic::iced::Length::Fixed(
+                20.0,
+            )))
+            .push(widget::text::caption("Made with ❤ for the COSMIC desktop"))
+            .push(widget::Space::with_height(cosmic::iced::Length::Fixed(
+                10.0,
+            )))
+            .push(
+                widget::button::link("https://github.com/hojjatabdollahi/kiwi")
+                    .on_press(Message::OpenUrl(
+                        "https://github.com/hojjatabdollahi/kiwi".to_string(),
+                    ))
+                    .trailing_icon(true),
+            )
+            .align_x(cosmic::iced::Alignment::Center)
+            .width(cosmic::iced::Length::Fill)
+            .into()
+    }
+
     fn save_config(&self) {
         if let Some(ref handler) = self.config_handler {
             if let Err(e) = self.config.write_entry(handler) {

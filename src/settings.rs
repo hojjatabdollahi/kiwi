@@ -49,7 +49,7 @@ pub fn settings_view(
         preview_size,
         1.0, // fade_duration (unused when fade disabled)
         palette,
-        false, // fade_enabled = false for static preview
+        false,    // fade_enabled = false for static preview
         position, // Use current position setting for preview
     );
 
@@ -91,26 +91,23 @@ pub fn settings_view(
         .push(
             widget::row()
                 .spacing(15)
-                .push(
-                    widget::radio(
-                        KeyDisplayMode::TypedCharacter.name(),
-                        KeyDisplayMode::TypedCharacter,
-                        Some(key_display_mode),
-                        Message::SetKeyDisplayMode,
-                    ),
-                )
-                .push(
-                    widget::radio(
-                        KeyDisplayMode::PhysicalKey.name(),
-                        KeyDisplayMode::PhysicalKey,
-                        Some(key_display_mode),
-                        Message::SetKeyDisplayMode,
-                    ),
-                ),
+                .push(widget::radio(
+                    KeyDisplayMode::TypedCharacter.name(),
+                    KeyDisplayMode::TypedCharacter,
+                    Some(key_display_mode),
+                    Message::SetKeyDisplayMode,
+                ))
+                .push(widget::radio(
+                    KeyDisplayMode::PhysicalKey.name(),
+                    KeyDisplayMode::PhysicalKey,
+                    Some(key_display_mode),
+                    Message::SetKeyDisplayMode,
+                )),
         )
         .push(
-            widget::text::caption(format!("Example: {}", key_display_mode.example()))
-                .class(cosmic::theme::Text::Color(Color::from_rgba(0.6, 0.6, 0.6, 1.0))),
+            widget::text::caption(format!("Example: {}", key_display_mode.example())).class(
+                cosmic::theme::Text::Color(Color::from_rgba(0.6, 0.6, 0.6, 1.0)),
+            ),
         );
 
     let content = widget::column()
@@ -140,8 +137,7 @@ pub fn settings_view(
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(widget::tooltip(
-                    widget::slider(32.0..=160.0, key_size, Message::SetKeySize)
-                        .width(Length::Fill),
+                    widget::slider(32.0..=160.0, key_size, Message::SetKeySize).width(Length::Fill),
                     "Size",
                     widget::tooltip::Position::Bottom,
                 ))
@@ -179,11 +175,13 @@ pub fn settings_view(
         )
         .push(widget::divider::horizontal::default())
         // Position selector (centered, no label, with padding)
+        .push(widget::text::body("Position"))
         .push(position_container);
 
     // Version text (bottom right)
-    let version_text = widget::text::caption(format!("v{}", APP_VERSION))
-        .class(cosmic::theme::Text::Color(Color::from_rgba(0.5, 0.5, 0.5, 0.8)));
+    let version_text = widget::text::caption(format!("v{}", APP_VERSION)).class(
+        cosmic::theme::Text::Color(Color::from_rgba(0.5, 0.5, 0.5, 0.8)),
+    );
 
     // Wrap content in scrollable and center it (with clipping to prevent overflow into header)
     let scrollable_content = widget::container(

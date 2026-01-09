@@ -110,15 +110,10 @@ fn prettify_key_name(name: &str) -> Option<String> {
     }
 
     // Strip "KEY_" prefix
-    let stripped = if name.starts_with("KEY_") {
-        &name[4..]
-    } else {
-        name
-    };
+    let stripped = name.strip_prefix("KEY_").unwrap_or(name);
 
     // Handle keypad keys
-    if stripped.starts_with("KP") {
-        let kp_key = &stripped[2..];
+    if let Some(kp_key) = stripped.strip_prefix("KP") {
         return Some(format!("KP{}", kp_key));
     }
 
@@ -139,26 +134,25 @@ fn prettify_key_name(name: &str) -> Option<String> {
 
     // Common symbols - return the symbol character
     match stripped {
-        "MINUS" => return Some("-".to_string()),
-        "EQUAL" => return Some("=".to_string()),
-        "LEFTBRACE" => return Some("[".to_string()),
-        "RIGHTBRACE" => return Some("]".to_string()),
-        "SEMICOLON" => return Some(";".to_string()),
-        "APOSTROPHE" => return Some("'".to_string()),
-        "GRAVE" => return Some("`".to_string()),
-        "BACKSLASH" => return Some("\\".to_string()),
-        "COMMA" => return Some(",".to_string()),
-        "DOT" => return Some(".".to_string()),
-        "SLASH" => return Some("/".to_string()),
-        "KPASTERISK" => return Some("*".to_string()),
-        "KPPLUS" => return Some("+".to_string()),
-        "KPMINUS" => return Some("-".to_string()),
-        "KPSLASH" => return Some("/".to_string()),
-        "KPDOT" => return Some(".".to_string()),
-
+        "MINUS" => Some("-".to_string()),
+        "EQUAL" => Some("=".to_string()),
+        "LEFTBRACE" => Some("[".to_string()),
+        "RIGHTBRACE" => Some("]".to_string()),
+        "SEMICOLON" => Some(";".to_string()),
+        "APOSTROPHE" => Some("'".to_string()),
+        "GRAVE" => Some("`".to_string()),
+        "BACKSLASH" => Some("\\".to_string()),
+        "COMMA" => Some(",".to_string()),
+        "DOT" => Some(".".to_string()),
+        "SLASH" => Some("/".to_string()),
+        "KPASTERISK" => Some("*".to_string()),
+        "KPPLUS" => Some("+".to_string()),
+        "KPMINUS" => Some("-".to_string()),
+        "KPSLASH" => Some("/".to_string()),
+        "KPDOT" => Some(".".to_string()),
         // These are handled above but just in case
-        "SPACE" => return Some("␣".to_string()),
-        "ENTER" => return Some("↵".to_string()),
+        "SPACE" => Some("␣".to_string()),
+        "ENTER" => Some("↵".to_string()),
 
         // For other named keys, title-case them
         _ => {
@@ -307,7 +301,12 @@ fn process_input_event(
                         } else {
                             // Check for deactivation shortcut: Super+Shift+S
                             // KEY_S = 31 in evdev
-                            if key == 31 && s.modifiers.super_key && s.modifiers.shift && !s.modifiers.ctrl && !s.modifiers.alt {
+                            if key == 31
+                                && s.modifiers.super_key
+                                && s.modifiers.shift
+                                && !s.modifiers.ctrl
+                                && !s.modifiers.alt
+                            {
                                 log::info!("Deactivation shortcut detected: Super+Shift+S");
                                 // Clear current state to avoid showing the shortcut
                                 s.current_key = None;
@@ -316,12 +315,13 @@ fn process_input_event(
                                 // Drop the lock before sending to avoid potential deadlock
                                 drop(s);
                                 // Send toggle action to main app (will deactivate since we're currently active)
-                                if let Err(e) = tray_tx.send(crate::tray::TrayAction::ToggleActive) {
+                                if let Err(e) = tray_tx.send(crate::tray::TrayAction::ToggleActive)
+                                {
                                     log::error!("Failed to send deactivation action: {}", e);
                                 }
                                 return;
                             }
-                            
+
                             // Non-modifier key pressed
                             if let Some(key_str) = key_str {
                                 // Mark that a key was pressed with modifiers

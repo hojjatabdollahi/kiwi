@@ -159,7 +159,8 @@ pub fn create_layer_surface_for_output(
         namespace: "kiwi".to_string(),
         // None = compositor decides size (full screen when anchored to all edges)
         size: None,
-        margin: cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin::default(),
+        margin:
+            cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin::default(),
         exclusive_zone: -1,
         size_limits: Limits::NONE,
     })
@@ -221,7 +222,14 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
                 }
             }
 
-            (display, s.key_size, s.fade_duration, s.palette, s.position, s.history_count)
+            (
+                display,
+                s.key_size,
+                s.fade_duration,
+                s.palette,
+                s.position,
+                s.history_count,
+            )
         })
         .unwrap_or((
             Vec::new(),
@@ -275,20 +283,23 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
     // For BottomCenter: newest key at center, older keys grow to the left
     // Use a row with two halves: [left half with content aligned right] [right half empty spacer]
     // This puts the rightmost key at screen center
-    let positioned_content: cosmic::Element<'static, Message> = if position == OverlayPosition::BottomCenter {
-        cosmic::widget::row()
-            // Left half: content aligned to the right edge (screen center)
-            .push(
-                cosmic::widget::container(content)
-                    .width(cosmic::iced::Length::FillPortion(1))
-                    .align_x(cosmic::iced::alignment::Horizontal::Right)
-            )
-            // Right half: empty spacer (takes up right 50% of screen)
-            .push(cosmic::widget::Space::with_width(cosmic::iced::Length::FillPortion(1)))
-            .into()
-    } else {
-        content
-    };
+    let positioned_content: cosmic::Element<'static, Message> =
+        if position == OverlayPosition::BottomCenter {
+            cosmic::widget::row()
+                // Left half: content aligned to the right edge (screen center)
+                .push(
+                    cosmic::widget::container(content)
+                        .width(cosmic::iced::Length::FillPortion(1))
+                        .align_x(cosmic::iced::alignment::Horizontal::Right),
+                )
+                // Right half: empty spacer (takes up right 50% of screen)
+                .push(cosmic::widget::Space::with_width(
+                    cosmic::iced::Length::FillPortion(1),
+                ))
+                .into()
+        } else {
+            content
+        };
 
     // Full-screen container with proper alignment
     cosmic::widget::container(positioned_content)
