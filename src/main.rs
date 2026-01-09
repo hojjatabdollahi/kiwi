@@ -130,7 +130,8 @@ impl cosmic::Application for KiwiApp {
         )));
 
         // Always start input capture (it checks enabled state internally)
-        input::spawn_input_capture(shared_state.clone());
+        // Pass a clone of the tray sender so input thread can trigger deactivation
+        input::spawn_input_capture(shared_state.clone(), flags.tray_tx.clone());
 
         // Create tray icon
         let tray_handle = tray::create_tray(config.enabled, flags.tray_tx);

@@ -196,7 +196,10 @@ pub fn is_modifier(key: u32) -> bool {
 }
 
 /// Start input capture in a background thread
-pub fn spawn_input_capture(state: Arc<Mutex<SharedState>>) {
+pub fn spawn_input_capture(
+    state: Arc<Mutex<SharedState>>,
+    tray_tx: crossbeam_channel::Sender<crate::tray::TrayAction>,
+) {
     thread::spawn(move || {
         match InputCapture::new() {
             Ok(mut capture) => {
@@ -217,7 +220,7 @@ pub fn spawn_input_capture(state: Arc<Mutex<SharedState>>) {
                     }
 
                     for event in capture.events() {
-                        process_input_event(&state, event, &mut xkb_state);
+                        process_input_event(&state, event, &mut xkb_state, &tray_tx);
                     }
 
                     // Small sleep to prevent busy-waiting
@@ -236,6 +239,7 @@ fn process_input_event(
     state: &Arc<Mutex<SharedState>>,
     event: InputEvent,
     xkb_state: &mut Option<XkbState>,
+    tray_tx: &crossbeam_channel::Sender<crate::tray::TrayAction>,
 ) {
     match event {
         InputEvent::Key {
@@ -300,23 +304,42 @@ fn process_input_event(
                             s.peak_modifiers.alt |= s.modifiers.alt;
                             s.peak_modifiers.shift |= s.modifiers.shift;
                             s.peak_modifiers.super_key |= s.modifiers.super_key;
-                        } else if let Some(key_str) = key_str {
+                        } else {
+                            // Check for deactivation shortcut: Super+Shift+S
+                            // KEY_S = 31 in evdev
+                            if key == 31 && s.modifiers.super_key && s.modifiers.shift && !s.modifiers.ctrl && !s.modifiers.alt {
+                                log::info!("Deactivation shortcut detected: Super+Shift+S");
+                                // Clear current state to avoid showing the shortcut
+                                s.current_key = None;
+                                s.peak_modifiers = KeyModifiers::default();
+                                s.key_pressed_with_modifiers = false;
+                                // Drop the lock before sending to avoid potential deadlock
+                                drop(s);
+                                // Send toggle action to main app (will deactivate since we're currently active)
+                                if let Err(e) = tray_tx.send(crate::tray::TrayAction::ToggleActive) {
+                                    log::error!("Failed to send deactivation action: {}", e);
+                                }
+                                return;
+                            }
+                            
                             // Non-modifier key pressed
-                            // Mark that a key was pressed with modifiers
-                            if s.modifiers.any() {
-                                s.key_pressed_with_modifiers = true;
+                            if let Some(key_str) = key_str {
+                                // Mark that a key was pressed with modifiers
+                                if s.modifiers.any() {
+                                    s.key_pressed_with_modifiers = true;
+                                }
+                                // If there was a previous key being held, release it to history
+                                if let Some((prev_key, prev_mods)) = s.current_key.take() {
+                                    let completed = if prev_mods.any() {
+                                        Keystroke::combination(&prev_mods, prev_key, false)
+                                    } else {
+                                        Keystroke::single(prev_key, false)
+                                    };
+                                    push_history(&mut s.history, completed);
+                                }
+                                // Set the new key as currently pressed, with current modifiers
+                                s.current_key = Some((key_str, s.modifiers.clone()));
                             }
-                            // If there was a previous key being held, release it to history
-                            if let Some((prev_key, prev_mods)) = s.current_key.take() {
-                                let completed = if prev_mods.any() {
-                                    Keystroke::combination(&prev_mods, prev_key, false)
-                                } else {
-                                    Keystroke::single(prev_key, false)
-                                };
-                                push_history(&mut s.history, completed);
-                            }
-                            // Set the new key as currently pressed, with current modifiers
-                            s.current_key = Some((key_str, s.modifiers.clone()));
                         }
                     }
                     KeyState::Released => {
