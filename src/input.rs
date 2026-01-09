@@ -3,89 +3,145 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use evdev::Key;
+
 use crate::capture::{Axis, ButtonState, InputCapture, InputEvent, KeyState, SwipeDirection};
 use crate::keystroke::{KeyModifiers, Keystroke};
 use crate::overlay::{push_history, SharedState};
 
-/// Convert key code to display string
+/// Convert key code to display string using evdev
 pub fn key_to_string(key: u32) -> Option<String> {
-    // Common key codes (Linux input event codes)
-    let s = match key {
-        1 => "Esc",
-        2..=10 => return Some(format!("{}", key - 1)),
-        11 => "0",
-        12 => "-",
-        13 => "=",
-        14 => "⌫",
-        15 => "Tab",
-        16 => "Q",
-        17 => "W",
-        18 => "E",
-        19 => "R",
-        20 => "T",
-        21 => "Y",
-        22 => "U",
-        23 => "I",
-        24 => "O",
-        25 => "P",
-        26 => "[",
-        27 => "]",
-        28 => "↵",
-        29 => "Ctrl",
-        30 => "A",
-        31 => "S",
-        32 => "D",
-        33 => "F",
-        34 => "G",
-        35 => "H",
-        36 => "J",
-        37 => "K",
-        38 => "L",
-        39 => ";",
-        40 => "'",
-        41 => "`",
-        42 => "⇧",
-        43 => "\\",
-        44 => "Z",
-        45 => "X",
-        46 => "C",
-        47 => "V",
-        48 => "B",
-        49 => "N",
-        50 => "M",
-        51 => ",",
-        52 => ".",
-        53 => "/",
-        54 => "⇧",
-        55 => "*",
-        56 => "Alt",
-        57 => "␣",
-        58 => "Caps",
-        59..=68 => return Some(format!("F{}", key - 58)),
-        87 => "F11",
-        88 => "F12",
-        96 => "↵",
-        97 => "Ctrl",
-        100 => "Alt",
-        102 => "Home",
-        103 => "↑",
-        104 => "PgUp",
-        105 => "←",
-        106 => "→",
-        107 => "End",
-        108 => "↓",
-        109 => "PgDn",
-        110 => "Ins",
-        111 => "Del",
-        125 | 126 => "Super",
-        _ => return None,
+    let evdev_key = Key::new(key as u16);
+    
+    // Special keys with custom symbols/names
+    match evdev_key {
+        // Modifiers
+        Key::KEY_LEFTCTRL | Key::KEY_RIGHTCTRL => return Some("Ctrl".to_string()),
+        Key::KEY_LEFTALT | Key::KEY_RIGHTALT => return Some("Alt".to_string()),
+        Key::KEY_LEFTSHIFT | Key::KEY_RIGHTSHIFT => return Some("⇧".to_string()),
+        Key::KEY_LEFTMETA | Key::KEY_RIGHTMETA => return Some("Super".to_string()),
+        
+        // Special keys with symbols
+        Key::KEY_ENTER | Key::KEY_KPENTER => return Some("↵".to_string()),
+        Key::KEY_BACKSPACE => return Some("⌫".to_string()),
+        Key::KEY_SPACE => return Some("␣".to_string()),
+        Key::KEY_TAB => return Some("Tab".to_string()),
+        Key::KEY_ESC => return Some("Esc".to_string()),
+        Key::KEY_CAPSLOCK => return Some("Caps".to_string()),
+        
+        // Arrow keys
+        Key::KEY_UP => return Some("↑".to_string()),
+        Key::KEY_DOWN => return Some("↓".to_string()),
+        Key::KEY_LEFT => return Some("←".to_string()),
+        Key::KEY_RIGHT => return Some("→".to_string()),
+        
+        // Navigation
+        Key::KEY_HOME => return Some("Home".to_string()),
+        Key::KEY_END => return Some("End".to_string()),
+        Key::KEY_PAGEUP => return Some("PgUp".to_string()),
+        Key::KEY_PAGEDOWN => return Some("PgDn".to_string()),
+        Key::KEY_INSERT => return Some("Ins".to_string()),
+        Key::KEY_DELETE => return Some("Del".to_string()),
+        
+        _ => {}
+    }
+    
+    // For everything else, use the evdev name and prettify it
+    let name = format!("{:?}", evdev_key);
+    prettify_key_name(&name)
+}
+
+/// Prettify an evdev key name like "KEY_A" to "A", "KEY_F1" to "F1", etc.
+fn prettify_key_name(name: &str) -> Option<String> {
+    // Unknown keys
+    if name.starts_with("unknown") {
+        return None;
+    }
+    
+    // Strip "KEY_" prefix
+    let stripped = if name.starts_with("KEY_") {
+        &name[4..]
+    } else {
+        name
     };
-    Some(s.to_string())
+    
+    // Handle keypad keys
+    if stripped.starts_with("KP") {
+        let kp_key = &stripped[2..];
+        return Some(format!("KP{}", kp_key));
+    }
+    
+    // Single letter/number keys - return as-is
+    if stripped.len() == 1 {
+        return Some(stripped.to_string());
+    }
+    
+    // Function keys (F1-F12)
+    if stripped.starts_with('F') && stripped[1..].parse::<u32>().is_ok() {
+        return Some(stripped.to_string());
+    }
+    
+    // Number keys (0-9 are KEY_0 through KEY_9 but also KEY_1 = 2, etc.)
+    if stripped.parse::<u32>().is_ok() {
+        return Some(stripped.to_string());
+    }
+    
+    // Common symbols - return the symbol character
+    match stripped {
+        "MINUS" => return Some("-".to_string()),
+        "EQUAL" => return Some("=".to_string()),
+        "LEFTBRACE" => return Some("[".to_string()),
+        "RIGHTBRACE" => return Some("]".to_string()),
+        "SEMICOLON" => return Some(";".to_string()),
+        "APOSTROPHE" => return Some("'".to_string()),
+        "GRAVE" => return Some("`".to_string()),
+        "BACKSLASH" => return Some("\\".to_string()),
+        "COMMA" => return Some(",".to_string()),
+        "DOT" => return Some(".".to_string()),
+        "SLASH" => return Some("/".to_string()),
+        "KPASTERISK" => return Some("*".to_string()),
+        "KPPLUS" => return Some("+".to_string()),
+        "KPMINUS" => return Some("-".to_string()),
+        "KPSLASH" => return Some("/".to_string()),
+        "KPDOT" => return Some(".".to_string()),
+        
+        // These are handled above but just in case
+        "SPACE" => return Some("␣".to_string()),
+        "ENTER" => return Some("↵".to_string()),
+        
+        // For other named keys, title-case them
+        _ => {
+            // Convert SCROLLLOCK to ScrollLock, NUMLOCK to NumLock, etc.
+            let result: String = stripped
+                .chars()
+                .enumerate()
+                .map(|(i, c)| {
+                    if i == 0 {
+                        c.to_ascii_uppercase()
+                    } else {
+                        c.to_ascii_lowercase()
+                    }
+                })
+                .collect();
+            Some(result)
+        }
+    }
 }
 
 /// Check if a key code is a modifier
 pub fn is_modifier(key: u32) -> bool {
-    matches!(key, 29 | 97 | 56 | 100 | 42 | 54 | 125 | 126)
+    let evdev_key = Key::new(key as u16);
+    matches!(
+        evdev_key,
+        Key::KEY_LEFTCTRL
+            | Key::KEY_RIGHTCTRL
+            | Key::KEY_LEFTALT
+            | Key::KEY_RIGHTALT
+            | Key::KEY_LEFTSHIFT
+            | Key::KEY_RIGHTSHIFT
+            | Key::KEY_LEFTMETA
+            | Key::KEY_RIGHTMETA
+    )
 }
 
 /// Start input capture in a background thread

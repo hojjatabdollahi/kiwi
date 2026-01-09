@@ -55,6 +55,8 @@ struct KiwiApp {
     #[allow(dead_code)]
     config_handler: Option<cosmic_config::Config>,
     pending_save: bool,
+    /// Key size when surfaces were last created (for detecting when to recreate)
+    last_surface_key_size: f32,
     /// Crossbeam receiver for tray actions
     tray_rx: CbReceiver<tray::TrayAction>,
     /// Handle to keep tray alive
@@ -131,11 +133,13 @@ impl cosmic::Application for KiwiApp {
         // Create tray icon
         let tray_handle = tray::create_tray(config.enabled, flags.tray_tx);
 
+        let last_surface_key_size = config.key_size;
         let app = Self {
             core,
             config,
             config_handler,
             pending_save: false,
+            last_surface_key_size,
             tray_rx: flags.tray_rx,
             tray_handle: Some(tray_handle),
             shared_state,
@@ -325,19 +329,16 @@ impl cosmic::Application for KiwiApp {
                     self.pending_save = false;
                     self.save_config();
                     
-                    // Check if key_size changed significantly - recreate surfaces
-                    let old_key_size = self.shared_state
-                        .lock()
-                        .map(|s| s.key_size)
-                        .unwrap_or(36.0);
-                    if (old_key_size - self.config.key_size).abs() > 0.1 {
+                    // Check if key_size changed significantly from when surfaces were created
+                    if (self.last_surface_key_size - self.config.key_size).abs() > 0.1 {
+                        self.last_surface_key_size = self.config.key_size;
                         return self.recreate_layer_surfaces();
                     }
                 }
             }
             Message::ConfigChanged(config) => {
                 log::info!("Config changed externally: enabled={}", config.enabled);
-                let size_changed = (self.config.key_size - config.key_size).abs() > 0.1;
+                let size_changed = (self.last_surface_key_size - config.key_size).abs() > 0.1;
                 let position_changed = self.config.position != config.position;
                 
                 self.config = config.clone();
@@ -350,6 +351,7 @@ impl cosmic::Application for KiwiApp {
                 
                 // Recreate surfaces if needed
                 if size_changed || position_changed {
+                    self.last_surface_key_size = self.config.key_size;
                     return self.recreate_layer_surfaces();
                 }
             }
