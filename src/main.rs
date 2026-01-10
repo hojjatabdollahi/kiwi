@@ -20,27 +20,23 @@ use cosmic::iced_futures::event::listen_with;
 use cosmic::iced_futures::futures::{SinkExt, StreamExt};
 use cosmic::prelude::*;
 use cosmic::widget;
+use cosmic::widget::about::About;
 use crossbeam_channel::{Receiver as CbReceiver, Sender as CbSender};
 use wayland_client::protocol::wl_output::WlOutput;
 
-use config::{Config, OverlayPosition, PaletteType, APP_ID, APP_VERSION};
+use config::{Config, OverlayPosition, PaletteType, APP_ID};
 use overlay::{
     create_layer_surface_for_output, destroy_surface, view_overlay, OutputState, SharedState,
 };
+
+const REPOSITORY: &str = "https://github.com/hojjatabdollahi/kiwi";
+const APP_ICON: &[u8] = include_bytes!("../data/icons/kiwi-on.svg");
 
 /// Context pages for the context drawer
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub enum ContextPage {
     #[default]
     About,
-}
-
-impl ContextPage {
-    fn title(&self) -> &'static str {
-        match self {
-            Self::About => "About",
-        }
-    }
 }
 
 fn main() -> cosmic::iced::Result {
@@ -84,6 +80,8 @@ struct KiwiApp {
     outputs: Vec<OutputState>,
     /// Current context page for context drawer
     context_page: ContextPage,
+    /// About page widget
+    about: About,
 }
 
 #[derive(Debug, Clone)]
@@ -111,7 +109,7 @@ pub enum Message {
     ConfigChanged(Config),
     // Context drawer
     ToggleContextPage(ContextPage),
-    OpenUrl(String),
+    LaunchUrl(String),
     // Overlay
     OutputEvent(OutputEvent, WlOutput),
     Tick,
@@ -159,6 +157,15 @@ impl cosmic::Application for KiwiApp {
         // Create tray icon
         let tray_handle = tray::create_tray(config.enabled, flags.tray_tx);
 
+        // Create the about widget
+        let about = About::default()
+            .name("Kiwi")
+            .icon(widget::icon::from_svg_bytes(APP_ICON))
+            .version(env!("CARGO_PKG_VERSION"))
+            .author("Hojjat Abdollahi")
+            .links([("Repository", REPOSITORY)])
+            .license("GPL-3.0");
+
         let app = Self {
             core,
             config,
@@ -169,6 +176,7 @@ impl cosmic::Application for KiwiApp {
             shared_state,
             outputs: Vec::new(),
             context_page: ContextPage::default(),
+            about,
         };
 
         // Load bundled font
@@ -204,11 +212,11 @@ impl cosmic::Application for KiwiApp {
         }
 
         Some(match self.context_page {
-            ContextPage::About => cosmic::app::context_drawer(
-                self.about(),
+            ContextPage::About => cosmic::app::context_drawer::about(
+                &self.about,
+                |url| Message::LaunchUrl(url.to_string()),
                 Message::ToggleContextPage(ContextPage::About),
-            )
-            .title(self.context_page.title()),
+            ),
         })
     }
 
@@ -468,8 +476,8 @@ impl cosmic::Application for KiwiApp {
                     self.core.window.show_context = true;
                 }
             }
-            Message::OpenUrl(url) => {
-                if let Err(e) = open::that(&url) {
+            Message::LaunchUrl(url) => {
+                if let Err(e) = open::that_detached(&url) {
                     log::error!("Failed to open URL {}: {}", url, e);
                 }
             }
@@ -506,49 +514,6 @@ fn tray_subscription(rx: CbReceiver<tray::TrayAction>) -> Subscription<Message> 
 }
 
 impl KiwiApp {
-    fn about(&self) -> Element<'_, Message> {
-        use cosmic::iced_widget::svg;
-
-        let cosmic_theme = self.core.system_theme().cosmic();
-        let spacing = cosmic_theme.space_xxs();
-
-        // Kiwi logo
-        let logo_bytes = include_bytes!("../data/icons/kiwi-on.svg");
-        let logo = cosmic::iced_widget::Svg::new(svg::Handle::from_memory(logo_bytes.as_slice()))
-            .width(cosmic::iced::Length::Fixed(128.0))
-            .height(cosmic::iced::Length::Fixed(128.0));
-
-        widget::column()
-            .spacing(spacing)
-            .push(logo)
-            .push(widget::Space::with_height(cosmic::iced::Length::Fixed(
-                10.0,
-            )))
-            .push(widget::text::title1("Kiwi"))
-            .push(widget::text::body(format!("Version {}", APP_VERSION)))
-            .push(widget::Space::with_height(cosmic::iced::Length::Fixed(
-                10.0,
-            )))
-            .push(widget::text::body("A keystroke visualizer for COSMIC DE"))
-            .push(widget::Space::with_height(cosmic::iced::Length::Fixed(
-                20.0,
-            )))
-            .push(widget::text::caption("Made with ❤ for the COSMIC desktop"))
-            .push(widget::Space::with_height(cosmic::iced::Length::Fixed(
-                10.0,
-            )))
-            .push(
-                widget::button::link("https://github.com/hojjatabdollahi/kiwi")
-                    .on_press(Message::OpenUrl(
-                        "https://github.com/hojjatabdollahi/kiwi".to_string(),
-                    ))
-                    .trailing_icon(true),
-            )
-            .align_x(cosmic::iced::Alignment::Center)
-            .width(cosmic::iced::Length::Fill)
-            .into()
-    }
-
     fn save_config(&self) {
         if let Some(ref handler) = self.config_handler {
             if let Err(e) = self.config.write_entry(handler) {

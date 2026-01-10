@@ -29,7 +29,7 @@ input = "0.9"
 udev = "0.9"
 libc = "0.2"
 evdev = "0.13.2"
-xkbcommon = "0.8"
+xkbcommon = "0.9"
 
 # Config
 serde = { version = "1.0", features = ["derive"] }
@@ -44,4 +44,12 @@ open = "5"
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic"
 default-features = false
-features = ["dbus-config", "multi-window", "tokio", "wayland", "winit", "wgpu"]
+features = [
+  "about",
+  "dbus-config",
+  "multi-window",
+  "tokio",
+  "wayland",
+  "winit",
+  "wgpu",
+]
