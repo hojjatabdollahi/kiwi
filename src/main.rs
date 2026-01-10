@@ -105,6 +105,9 @@ pub enum Message {
     SetKeyDisplayMode(config::KeyDisplayMode),
     SetIconStyle(config::IconStyle),
     SetHistoryCount(u8),
+    SetShowKeyboard(bool),
+    SetShowMouse(bool),
+    SetShowGestures(bool),
     SaveConfig,
     ConfigChanged(Config),
     // Context drawer
@@ -148,6 +151,9 @@ impl cosmic::Application for KiwiApp {
             config.key_display_mode,
             config.icon_style,
             config.history_count,
+            config.show_keyboard,
+            config.show_mouse,
+            config.show_gestures,
         )));
 
         // Always start input capture (it checks enabled state internally)
@@ -235,6 +241,9 @@ impl cosmic::Application for KiwiApp {
             self.config.icon_style,
             self.config.history_count,
             self.config.enabled,
+            self.config.show_keyboard,
+            self.config.show_mouse,
+            self.config.show_gestures,
         )
     }
 
@@ -253,6 +262,9 @@ impl cosmic::Application for KiwiApp {
                 self.config.icon_style,
                 self.config.history_count,
                 self.config.enabled,
+                self.config.show_keyboard,
+                self.config.show_mouse,
+                self.config.show_gestures,
             )
         }
     }
@@ -428,6 +440,30 @@ impl cosmic::Application for KiwiApp {
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.history_count = count;
+                }
+            }
+            Message::SetShowKeyboard(show) => {
+                self.config.show_keyboard = show;
+                self.save_config();
+
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.show_keyboard = show;
+                }
+            }
+            Message::SetShowMouse(show) => {
+                self.config.show_mouse = show;
+                self.save_config();
+
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.show_mouse = show;
+                }
+            }
+            Message::SetShowGestures(show) => {
+                self.config.show_gestures = show;
+                self.save_config();
+
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.show_gestures = show;
                 }
             }
             Message::SaveConfig => {

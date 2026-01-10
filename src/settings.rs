@@ -34,6 +34,9 @@ pub fn settings_view(
     icon_style: IconStyle,
     history_count: u8,
     is_active: bool,
+    show_keyboard: bool,
+    show_mouse: bool,
+    show_gestures: bool,
 ) -> Element<'static, Message> {
     // Find current selection index
     let current_index = PaletteType::ALL.iter().position(|p| *p == palette);
@@ -133,6 +136,35 @@ pub fn settings_view(
                 )),
         );
 
+    // Input sources section
+    let input_sources_section = widget::column()
+        .spacing(6)
+        .push(widget::text::body("Input Sources"))
+        .push(
+            widget::row()
+                .spacing(10)
+                .align_y(cosmic::iced::Alignment::Center)
+                .push(widget::text::caption("Keyboard"))
+                .push(widget::Space::with_width(Length::Fill))
+                .push(widget::toggler(show_keyboard).on_toggle(Message::SetShowKeyboard)),
+        )
+        .push(
+            widget::row()
+                .spacing(10)
+                .align_y(cosmic::iced::Alignment::Center)
+                .push(widget::text::caption("Mouse"))
+                .push(widget::Space::with_width(Length::Fill))
+                .push(widget::toggler(show_mouse).on_toggle(Message::SetShowMouse)),
+        )
+        .push(
+            widget::row()
+                .spacing(10)
+                .align_y(cosmic::iced::Alignment::Center)
+                .push(widget::text::caption("Gestures"))
+                .push(widget::Space::with_width(Length::Fill))
+                .push(widget::toggler(show_gestures).on_toggle(Message::SetShowGestures)),
+        );
+
     let content = widget::column()
         .padding(10)
         .spacing(8)
@@ -152,6 +184,10 @@ pub fn settings_view(
         .push(display_mode_section)
         // Icon Style section
         .push(icon_style_section)
+        // Separator
+        .push(widget::divider::horizontal::default())
+        // Input Sources section
+        .push(input_sources_section)
         // Separator
         .push(widget::divider::horizontal::default())
         // Preview in fixed container (centered)

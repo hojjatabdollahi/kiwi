@@ -35,6 +35,12 @@ pub struct SharedState {
     pub icon_style: IconStyle,
     /// Maximum number of keystroke widgets to show
     pub history_count: u8,
+    /// Show keyboard input
+    pub show_keyboard: bool,
+    /// Show mouse input
+    pub show_mouse: bool,
+    /// Show touchpad gestures
+    pub show_gestures: bool,
     /// Current modifier state (live)
     pub modifiers: KeyModifiers,
     /// Peak modifiers held during current modifier session (for showing full combo on release)
@@ -60,6 +66,9 @@ impl SharedState {
         key_display_mode: crate::config::KeyDisplayMode,
         icon_style: IconStyle,
         history_count: u8,
+        show_keyboard: bool,
+        show_mouse: bool,
+        show_gestures: bool,
     ) -> Self {
         Self {
             enabled,
@@ -70,6 +79,9 @@ impl SharedState {
             key_display_mode,
             icon_style,
             history_count,
+            show_keyboard,
+            show_mouse,
+            show_gestures,
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
             current_key: None,
@@ -89,6 +101,9 @@ impl SharedState {
         self.key_display_mode = config.key_display_mode;
         self.icon_style = config.icon_style;
         self.history_count = config.history_count;
+        self.show_keyboard = config.show_keyboard;
+        self.show_mouse = config.show_mouse;
+        self.show_gestures = config.show_gestures;
     }
 
     /// Clean up expired keystrokes
@@ -102,13 +117,16 @@ impl Default for SharedState {
     fn default() -> Self {
         Self {
             enabled: true,
-            key_size: 36.0,
+            key_size: 64.0,
             fade_duration: 5.0,
-            palette: PaletteType::default(),
-            position: OverlayPosition::default(),
+            palette: PaletteType::Frosted,
+            position: OverlayPosition::TopRight,
             key_display_mode: crate::config::KeyDisplayMode::default(),
             icon_style: IconStyle::default(),
             history_count: 5,
+            show_keyboard: true,
+            show_mouse: true,
+            show_gestures: true,
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
             current_key: None,

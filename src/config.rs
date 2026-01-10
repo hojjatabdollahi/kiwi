@@ -256,19 +256,28 @@ pub struct Config {
     pub icon_style: IconStyle,
     /// Maximum number of keystroke widgets to show (1-10)
     pub history_count: u8,
+    /// Show keyboard input
+    pub show_keyboard: bool,
+    /// Show mouse input (clicks, scroll)
+    pub show_mouse: bool,
+    /// Show touchpad gestures (taps, swipes, multi-finger)
+    pub show_gestures: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             enabled: true,
-            key_size: 36.0,
+            key_size: 64.0,
             fade_duration: 5.0,
-            palette: PaletteType::Dark,
-            position: OverlayPosition::BottomLeft,
+            palette: PaletteType::Frosted,
+            position: OverlayPosition::TopRight,
             key_display_mode: KeyDisplayMode::TypedCharacter,
             icon_style: IconStyle::Symbol,
             history_count: 5,
+            show_keyboard: true,
+            show_mouse: true,
+            show_gestures: true,
         }
     }
 }

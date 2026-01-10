@@ -256,15 +256,15 @@ fn process_input_event(
             state: key_state,
         } => {
             // Get display mode and enabled state first
-            let (enabled, display_mode) = {
+            let (enabled, display_mode, show_keyboard) = {
                 if let Ok(s) = state.lock() {
-                    (s.enabled, s.key_display_mode)
+                    (s.enabled, s.key_display_mode, s.show_keyboard)
                 } else {
                     return;
                 }
             };
 
-            if !enabled {
+            if !enabled || !show_keyboard {
                 // Still update XKB state even when disabled to keep modifier state in sync
                 if let Some(ref mut xkb) = xkb_state {
                     xkb.update_key(key, key_state == KeyState::Pressed);
@@ -408,6 +408,14 @@ fn process_input_event(
                     return;
                 }
 
+                // Check if this input type is enabled
+                if is_touchpad && !s.show_gestures {
+                    return;
+                }
+                if !is_touchpad && !s.show_mouse {
+                    return;
+                }
+
                 let btn_str = match (button, is_touchpad) {
                     (272, true) => "Tap",     // Touchpad 1-finger tap
                     (273, true) => "2Tap",    // Touchpad 2-finger tap
@@ -470,7 +478,7 @@ fn process_input_event(
         }
         InputEvent::MouseScroll { axis, value } => {
             if let Ok(mut s) = state.lock() {
-                if !s.enabled {
+                if !s.enabled || !s.show_mouse {
                     return;
                 }
 
@@ -493,7 +501,7 @@ fn process_input_event(
         }
         InputEvent::TouchpadScroll { axis, value } => {
             if let Ok(mut s) = state.lock() {
-                if !s.enabled {
+                if !s.enabled || !s.show_gestures {
                     return;
                 }
 
@@ -528,7 +536,7 @@ fn process_input_event(
             direction,
         } => {
             if let Ok(mut s) = state.lock() {
-                if !s.enabled {
+                if !s.enabled || !s.show_gestures {
                     return;
                 }
 
@@ -551,7 +559,7 @@ fn process_input_event(
         }
         InputEvent::Hold { finger_count } => {
             if let Ok(mut s) = state.lock() {
-                if !s.enabled {
+                if !s.enabled || !s.show_gestures {
                     return;
                 }
 
