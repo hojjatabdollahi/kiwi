@@ -2,35 +2,47 @@
 
 use std::time::Instant;
 
-use crate::config::{OverlayPosition, Palette, PaletteType};
+use crate::config::{IconStyle, OverlayPosition, Palette, PaletteType};
 use cosmic::iced::{self, gradient, Background, Border, Color, Length};
 use cosmic::iced_widget::container;
 use cosmic::iced_widget::svg::{self, Svg};
 use cosmic::widget::{self, text};
 use cosmic::Element;
 
-// Embed icons at compile time (path relative to this file: src/keystroke.rs)
-const ICON_RETURN: &[u8] = include_bytes!("../data/icons/kiwi-return-symbolic.svg");
-const ICON_BACKSPACE: &[u8] = include_bytes!("../data/icons/kiwi-backspace-symbolic.svg");
-const ICON_SHIFT: &[u8] = include_bytes!("../data/icons/kiwi-shift-symbolic.svg");
-const ICON_CTRL: &[u8] = include_bytes!("../data/icons/kiwi-control-symbolic.svg");
-const ICON_ALT: &[u8] = include_bytes!("../data/icons/kiwi-alt.svg");
-const ICON_TAB: &[u8] = include_bytes!("../data/icons/kiwi-tab-symbolic.svg");
-const ICON_SPACE: &[u8] = include_bytes!("../data/icons/kiwi-space-symbolic.svg");
-const ICON_CAPS: &[u8] = include_bytes!("../data/icons/kiwi-capslock-symbolic.svg");
-const ICON_SUPER: &[u8] = include_bytes!("../data/icons/kiwi-super-symbolic.svg");
-const ICON_ESCAPE: &[u8] = include_bytes!("../data/icons/kiwi-escape-symbolic.svg");
-const ICON_DELETE: &[u8] = include_bytes!("../data/icons/kiwi-del-symbolic.svg");
-const ICON_PRTSCR: &[u8] = include_bytes!("../data/icons/kiwi-prtscr-symbolic.svg");
-const ICON_HOME: &[u8] = include_bytes!("../data/icons/kiwi-home-symbolic.svg");
-const ICON_END: &[u8] = include_bytes!("../data/icons/kiwi-end-symbolic.svg");
-const ICON_PGUP: &[u8] = include_bytes!("../data/icons/kiwi-pgup-symbolic.svg");
-const ICON_PGDOWN: &[u8] = include_bytes!("../data/icons/kiwi-pgdown-symbolic.svg");
+// Embed icons at compile time - symbol variants
+const ICON_ENTER_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-enter-symbol.svg");
+const ICON_BACKSPACE_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-backspace-symbol.svg");
+const ICON_SHIFT_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-shift-symbol.svg");
+const ICON_CTRL_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-control-symbol.svg");
+const ICON_ALT_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-alt-symbol.svg");
+const ICON_TAB_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-tab-symbol.svg");
+const ICON_SPACE_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-space-symbol.svg");
+const ICON_CAPS_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-capslock-symbol.svg");
+const ICON_SUPER_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-super-symbol.svg");
+const ICON_ESCAPE_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-escape-symbol.svg");
+const ICON_DELETE_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-del-symbol.svg");
+const ICON_PRTSCR_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-prtscr-symbol.svg");
+const ICON_HOME_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-home-symbol.svg");
+const ICON_END_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-end-symbol.svg");
+const ICON_PGUP_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-pgup-symbol.svg");
+const ICON_PGDOWN_SYMBOL: &[u8] = include_bytes!("../data/icons/kiwi-pgdown-symbol.svg");
+
+// Text variants (for keys that have them)
+const ICON_SHIFT_TEXT: &[u8] = include_bytes!("../data/icons/kiwi-shift-text.svg");
+const ICON_CTRL_TEXT: &[u8] = include_bytes!("../data/icons/kiwi-control-text.svg");
+const ICON_ALT_TEXT: &[u8] = include_bytes!("../data/icons/kiwi-alt-text.svg");
+const ICON_TAB_TEXT: &[u8] = include_bytes!("../data/icons/kiwi-tab-text.svg");
+const ICON_CAPS_TEXT: &[u8] = include_bytes!("../data/icons/kiwi-capslock-text.svg");
+const ICON_SUPER_TEXT: &[u8] = include_bytes!("../data/icons/kiwi-super-text.svg");
+
+// Mouse icons
 const ICON_LEFT_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-left-click-symbolic.svg");
 const ICON_RIGHT_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-right-click-symbolic.svg");
 const ICON_MIDDLE_CLICK: &[u8] = include_bytes!("../data/icons/kiwi-middle-click-symbolic.svg");
 const ICON_SCROLL_UP: &[u8] = include_bytes!("../data/icons/kiwi-scroll-up-symbolic.svg");
 const ICON_SCROLL_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-scroll-down-symbolic.svg");
+const ICON_CLICK_DRAG: &[u8] = include_bytes!("../data/icons/kiwi-click-drag-symbol.svg");
+
 // Touchpad gestures
 const ICON_TAP: &[u8] = include_bytes!("../data/icons/kiwi-tap.svg");
 const ICON_TWO_TAP: &[u8] = include_bytes!("../data/icons/kiwi-two-tap.svg");
@@ -44,10 +56,25 @@ const ICON_THREE_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-three-down.svg
 const ICON_FOUR_TAP: &[u8] = include_bytes!("../data/icons/kiwi-four-tap.svg");
 const ICON_FOUR_UP: &[u8] = include_bytes!("../data/icons/kiwi-four-up.svg");
 const ICON_FOUR_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-four-down.svg");
-// Special emblems and drag icons
-const ICON_PRESSED_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-pressed-down.svg");
-const ICON_CLICK_DRAG: &[u8] = include_bytes!("../data/icons/kiwi-click-drag.svg");
 const ICON_TAP_DRAG: &[u8] = include_bytes!("../data/icons/kiwi-tap-drag.svg");
+
+// Media keys (symbol only)
+const ICON_VOLUME_UP: &[u8] = include_bytes!("../data/icons/kiwi-volume-plus-symbol.svg");
+const ICON_VOLUME_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-volume-minus-symbol.svg");
+const ICON_VOLUME_MUTE: &[u8] = include_bytes!("../data/icons/kiwi-volume-mute-symbol.svg");
+const ICON_PLAY_PAUSE: &[u8] = include_bytes!("../data/icons/kiwi-play-pause-symbol.svg");
+const ICON_MEDIA: &[u8] = include_bytes!("../data/icons/kiwi-media-symbol.svg");
+const ICON_PREV: &[u8] = include_bytes!("../data/icons/kiwi-backward-symbol.svg");
+const ICON_NEXT: &[u8] = include_bytes!("../data/icons/kiwi-forward-symbol.svg");
+const ICON_AIRPLANE: &[u8] = include_bytes!("../data/icons/kiwi-airplane-symbol.svg");
+const ICON_BRIGHTNESS_UP: &[u8] = include_bytes!("../data/icons/kiwi-brightness-high-symbol.svg");
+const ICON_BRIGHTNESS_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-brightness-low-symbol.svg");
+const ICON_PAUSE: &[u8] = include_bytes!("../data/icons/kiwi-pause-symbol.svg");
+const ICON_SCROLL_LOCK: &[u8] = include_bytes!("../data/icons/kiwi-scroll-lock-symbol.svg");
+const ICON_INSERT: &[u8] = include_bytes!("../data/icons/kiwi-insert-symbol.svg");
+
+// Special emblems
+const ICON_PRESSED_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-pressed-down.svg");
 
 /// Threshold for combining repeated keystrokes (in milliseconds)
 pub const REPEAT_THRESHOLD_MS: u128 = 200;
@@ -224,25 +251,82 @@ fn plus_font_size_for_key(key_size: f32) -> f32 {
     key_size * 0.4
 }
 
-/// Returns (icon_data, should_apply_color)
-fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
+/// Returns (icon_data, should_apply_color) based on key and icon style preference
+fn get_icon_for_key_with_style(key: &str, icon_style: IconStyle) -> Option<(&'static [u8], bool)> {
+    let use_text = matches!(icon_style, IconStyle::Text);
+
     match key {
-        "↵" => Some((ICON_RETURN, true)),
-        "⌫" => Some((ICON_BACKSPACE, true)),
-        "⇧" => Some((ICON_SHIFT, true)),
-        "Ctrl" => Some((ICON_CTRL, true)),
-        "Alt" => Some((ICON_ALT, true)),
-        "Tab" => Some((ICON_TAB, true)),
-        "␣" => Some((ICON_SPACE, true)),
-        "Caps" => Some((ICON_CAPS, true)),
-        "Super" => Some((ICON_SUPER, false)), // Keep original colors
-        "Esc" => Some((ICON_ESCAPE, true)),
-        "Del" => Some((ICON_DELETE, true)),
-        "PrtSc" => Some((ICON_PRTSCR, true)),
-        "Home" => Some((ICON_HOME, true)),
-        "End" => Some((ICON_END, true)),
-        "PgUp" => Some((ICON_PGUP, true)),
-        "PgDn" => Some((ICON_PGDOWN, true)),
+        // Keys with symbol and text variants
+        "↵" => Some((ICON_ENTER_SYMBOL, true)),
+        "⇧" => Some((
+            if use_text {
+                ICON_SHIFT_TEXT
+            } else {
+                ICON_SHIFT_SYMBOL
+            },
+            true,
+        )),
+        "Ctrl" => Some((
+            if use_text {
+                ICON_CTRL_TEXT
+            } else {
+                ICON_CTRL_SYMBOL
+            },
+            true,
+        )),
+        "Alt" => Some((
+            if use_text {
+                ICON_ALT_TEXT
+            } else {
+                ICON_ALT_SYMBOL
+            },
+            true,
+        )),
+        "Tab" => Some((
+            if use_text {
+                ICON_TAB_TEXT
+            } else {
+                ICON_TAB_SYMBOL
+            },
+            true,
+        )),
+        "Caps" => Some((
+            if use_text {
+                ICON_CAPS_TEXT
+            } else {
+                ICON_CAPS_SYMBOL
+            },
+            true,
+        )),
+        "Super" => Some(if use_text {
+            (ICON_SUPER_TEXT, true)
+        } else {
+            (ICON_SUPER_SYMBOL, false)
+        }),
+        "Esc" => Some((ICON_ESCAPE_SYMBOL, true)),
+        "PrtSc" => Some((ICON_PRTSCR_SYMBOL, true)),
+        "Home" => Some((ICON_HOME_SYMBOL, true)),
+        "End" => Some((ICON_END_SYMBOL, true)),
+        "PgUp" => Some((ICON_PGUP_SYMBOL, true)),
+        "PgDn" => Some((ICON_PGDOWN_SYMBOL, true)),
+        // Symbol-only keys
+        "⌫" => Some((ICON_BACKSPACE_SYMBOL, true)),
+        "␣" => Some((ICON_SPACE_SYMBOL, true)),
+        "Del" => Some((ICON_DELETE_SYMBOL, true)),
+        // Media keys (symbol only)
+        "VolUp" => Some((ICON_VOLUME_UP, true)),
+        "VolDown" => Some((ICON_VOLUME_DOWN, true)),
+        "Mute" => Some((ICON_VOLUME_MUTE, true)),
+        "Play" => Some((ICON_PLAY_PAUSE, true)),
+        "Media" => Some((ICON_MEDIA, true)),
+        "Prev" => Some((ICON_PREV, true)),
+        "Next" => Some((ICON_NEXT, true)),
+        "Airplane" => Some((ICON_AIRPLANE, true)),
+        "BriUp" => Some((ICON_BRIGHTNESS_UP, true)),
+        "BriDown" => Some((ICON_BRIGHTNESS_DOWN, true)),
+        "Pause" => Some((ICON_PAUSE, true)),
+        "ScrLk" => Some((ICON_SCROLL_LOCK, true)),
+        "Ins" => Some((ICON_INSERT, true)),
         // Mouse
         "LClick" => Some((ICON_LEFT_CLICK, true)),
         "RClick" => Some((ICON_RIGHT_CLICK, true)),
@@ -270,11 +354,16 @@ fn get_icon_for_key_with_style(key: &str) -> Option<(&'static [u8], bool)> {
 }
 
 /// Creates the content element for a key - either an icon or text
-fn key_content<'a, M: 'a>(key: &str, text_color: Color, key_size: f32) -> Element<'a, M> {
+fn key_content<'a, M: 'a>(
+    key: &str,
+    text_color: Color,
+    key_size: f32,
+    icon_style: IconStyle,
+) -> Element<'a, M> {
     let icon_size = icon_size_for_key(key_size);
     let font_size = font_size_for_key(key_size);
 
-    if let Some((icon_data, apply_color)) = get_icon_for_key_with_style(key) {
+    if let Some((icon_data, apply_color)) = get_icon_for_key_with_style(key, icon_style) {
         // Use embedded SVG icon
         let handle = svg::Handle::from_memory(icon_data);
         let mut svg = Svg::new(handle)
@@ -318,8 +407,9 @@ fn key_content_with_emblem<'a, M: 'a>(
     text_color: Color,
     key_size: f32,
     pressed: bool,
+    icon_style: IconStyle,
 ) -> Element<'a, M> {
-    let content = key_content(key, text_color, key_size);
+    let content = key_content(key, text_color, key_size, icon_style);
 
     if pressed {
         let emblem_size = key_size * 0.22; // Smaller emblem
@@ -416,6 +506,7 @@ pub fn keystroke_widget<'a, M: 'a>(
     palette_type: PaletteType,
     fade_enabled: bool,
     position: OverlayPosition,
+    icon_style: IconStyle,
 ) -> Element<'a, M> {
     let opacity = if fade_enabled {
         keystroke.opacity(fade_duration)
@@ -471,6 +562,7 @@ pub fn keystroke_widget<'a, M: 'a>(
                     text_color,
                     key_size,
                     keystroke.pressed,
+                    icon_style,
                 ))
                 .width(Length::Fixed(key_size))
                 .height(Length::Fixed(key_size))
@@ -517,6 +609,7 @@ pub fn keystroke_widget<'a, M: 'a>(
             text_color,
             key_size,
             keystroke.pressed,
+            icon_style,
         ))
         .width(Length::Fixed(key_size))
         .height(Length::Fixed(key_size))
@@ -554,6 +647,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     palette_type: PaletteType,
     position: OverlayPosition,
     history_count: usize,
+    icon_style: IconStyle,
 ) -> Element<'a, M> {
     // Filter non-expired keystrokes, newest first, limit count
     let mut visible_keystrokes: Vec<&Keystroke> = keystrokes
@@ -568,7 +662,17 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
 
     let children: Vec<Element<'a, M>> = visible_keystrokes
         .into_iter()
-        .map(|k| keystroke_widget(k, key_size, fade_duration, palette_type, true, position))
+        .map(|k| {
+            keystroke_widget(
+                k,
+                key_size,
+                fade_duration,
+                palette_type,
+                true,
+                position,
+                icon_style,
+            )
+        })
         .collect();
 
     // Determine if we need to reverse the order for right-aligned positions

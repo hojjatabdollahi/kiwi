@@ -95,6 +95,20 @@ pub fn key_to_string(key: u32) -> Option<String> {
         KeyCode::KEY_DELETE => return Some("Del".to_string()),
         KeyCode::KEY_SYSRQ => return Some("PrtSc".to_string()),
 
+        // Media keys
+        KeyCode::KEY_VOLUMEUP => return Some("VolUp".to_string()),
+        KeyCode::KEY_VOLUMEDOWN => return Some("VolDown".to_string()),
+        KeyCode::KEY_MUTE => return Some("Mute".to_string()),
+        KeyCode::KEY_PLAYPAUSE => return Some("Play".to_string()),
+        KeyCode::KEY_PREVIOUSSONG => return Some("Prev".to_string()),
+        KeyCode::KEY_NEXTSONG => return Some("Next".to_string()),
+        KeyCode::KEY_MEDIA => return Some("Media".to_string()),
+        KeyCode::KEY_RFKILL => return Some("Airplane".to_string()),
+        KeyCode::KEY_BRIGHTNESSUP => return Some("BriUp".to_string()),
+        KeyCode::KEY_BRIGHTNESSDOWN => return Some("BriDown".to_string()),
+        KeyCode::KEY_PAUSE => return Some("Pause".to_string()),
+        KeyCode::KEY_SCROLLLOCK => return Some("ScrLk".to_string()),
+
         _ => {}
     }
 

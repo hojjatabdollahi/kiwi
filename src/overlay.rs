@@ -10,7 +10,7 @@ use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_lay
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use wayland_client::protocol::wl_output::WlOutput;
 
-use crate::config::{OverlayPosition, PaletteType};
+use crate::config::{IconStyle, OverlayPosition, PaletteType};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke};
 use crate::Message;
 
@@ -31,6 +31,8 @@ pub struct SharedState {
     pub position: OverlayPosition,
     /// Key display mode (typed character vs physical key)
     pub key_display_mode: crate::config::KeyDisplayMode,
+    /// Icon style (symbols vs text)
+    pub icon_style: IconStyle,
     /// Maximum number of keystroke widgets to show
     pub history_count: u8,
     /// Current modifier state (live)
@@ -56,6 +58,7 @@ impl SharedState {
         palette: PaletteType,
         position: OverlayPosition,
         key_display_mode: crate::config::KeyDisplayMode,
+        icon_style: IconStyle,
         history_count: u8,
     ) -> Self {
         Self {
@@ -65,6 +68,7 @@ impl SharedState {
             palette,
             position,
             key_display_mode,
+            icon_style,
             history_count,
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
@@ -83,6 +87,7 @@ impl SharedState {
         self.palette = config.palette;
         self.position = config.position;
         self.key_display_mode = config.key_display_mode;
+        self.icon_style = config.icon_style;
         self.history_count = config.history_count;
     }
 
@@ -102,6 +107,7 @@ impl Default for SharedState {
             palette: PaletteType::default(),
             position: OverlayPosition::default(),
             key_display_mode: crate::config::KeyDisplayMode::default(),
+            icon_style: IconStyle::default(),
             history_count: 5,
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
@@ -173,7 +179,7 @@ pub fn destroy_surface(surface_id: window::Id) -> cosmic::iced::Task<cosmic::Act
 
 /// Render the overlay view (full-screen, with layout positioning)
 pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static, Message> {
-    let (keystrokes, key_size, fade_duration, palette, position, history_count) = state
+    let (keystrokes, key_size, fade_duration, palette, position, history_count, icon_style) = state
         .lock()
         .map(|s| {
             if !s.enabled {
@@ -184,6 +190,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
                     s.palette,
                     s.position,
                     s.history_count,
+                    s.icon_style,
                 );
             }
 
@@ -229,6 +236,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
                 s.palette,
                 s.position,
                 s.history_count,
+                s.icon_style,
             )
         })
         .unwrap_or((
@@ -238,6 +246,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
             PaletteType::default(),
             OverlayPosition::default(),
             5,
+            IconStyle::default(),
         ));
 
     // Determine vertical and horizontal alignment based on position
@@ -277,6 +286,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
             palette,
             position,
             history_count as usize,
+            icon_style,
         )
     };
 

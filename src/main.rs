@@ -105,6 +105,7 @@ pub enum Message {
     SetPaletteIndex(usize),
     SetPosition(OverlayPosition),
     SetKeyDisplayMode(config::KeyDisplayMode),
+    SetIconStyle(config::IconStyle),
     SetHistoryCount(u8),
     SaveConfig,
     ConfigChanged(Config),
@@ -147,6 +148,7 @@ impl cosmic::Application for KiwiApp {
             config.palette,
             config.position,
             config.key_display_mode,
+            config.icon_style,
             config.history_count,
         )));
 
@@ -214,6 +216,7 @@ impl cosmic::Application for KiwiApp {
             self.config.palette,
             self.config.position,
             self.config.key_display_mode,
+            self.config.icon_style,
             self.config.history_count,
             self.config.enabled,
         )
@@ -231,6 +234,7 @@ impl cosmic::Application for KiwiApp {
                 self.config.palette,
                 self.config.position,
                 self.config.key_display_mode,
+                self.config.icon_style,
                 self.config.history_count,
                 self.config.enabled,
             )
@@ -390,6 +394,15 @@ impl cosmic::Application for KiwiApp {
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.key_display_mode = mode;
+                }
+            }
+            Message::SetIconStyle(style) => {
+                self.config.icon_style = style;
+                self.save_config();
+
+                // Update shared state
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.icon_style = style;
                 }
             }
             Message::SetHistoryCount(count) => {

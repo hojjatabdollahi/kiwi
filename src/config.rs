@@ -33,6 +33,27 @@ pub enum OverlayPosition {
     BottomCenter,
 }
 
+/// Icon style preference - symbols vs text labels
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum IconStyle {
+    /// Prefer symbol icons (e.g., ⌫ for backspace)
+    #[default]
+    Symbol,
+    /// Prefer text icons (e.g., "Backspace")
+    Text,
+}
+
+impl IconStyle {
+    pub const ALL: &'static [IconStyle] = &[IconStyle::Symbol, IconStyle::Text];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            IconStyle::Symbol => "Symbols",
+            IconStyle::Text => "Text",
+        }
+    }
+}
+
 /// Key display mode - typed character vs physical key
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum KeyDisplayMode {
@@ -217,7 +238,7 @@ fn color_with_opacity(color: Color, opacity: f32) -> Color {
 
 /// User configuration - persisted via cosmic-config
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, CosmicConfigEntry)]
-#[version = 7]
+#[version = 8]
 pub struct Config {
     /// Whether keystroke visualization is enabled
     pub enabled: bool,
@@ -231,6 +252,8 @@ pub struct Config {
     pub position: OverlayPosition,
     /// Key display mode - typed character or physical key
     pub key_display_mode: KeyDisplayMode,
+    /// Icon style - symbols or text
+    pub icon_style: IconStyle,
     /// Maximum number of keystroke widgets to show (1-10)
     pub history_count: u8,
 }
@@ -244,6 +267,7 @@ impl Default for Config {
             palette: PaletteType::Dark,
             position: OverlayPosition::BottomLeft,
             key_display_mode: KeyDisplayMode::TypedCharacter,
+            icon_style: IconStyle::Symbol,
             history_count: 5,
         }
     }

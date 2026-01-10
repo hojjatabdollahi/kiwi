@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   id="mdi-keyboard-esc"
+   viewBox="0 0 24 24"
+   version="1.1"
+   sodipodi:docname="kiwi-alt-text.svg"
+   inkscape:version="1.4.3 (0d15f75042, 2025-12-25)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs1" />
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="9.3565491"
+     inkscape:cx="13.306188"
+     inkscape:cy="27.734584"
+     inkscape:window-width="990"
+     inkscape:window-height="1114"
+     inkscape:window-x="20"
+     inkscape:window-y="20"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="g4" />
+  <g
+     id="g3"
+     transform="matrix(0.32160496,0,0,0.32160496,2.8927728,2.9977134)">
+    <g
+       id="g4"
+       transform="matrix(0.6651674,0,0,0.6651674,-6.309028,10.468069)">
+      <path
+         style="font-weight:800;font-size:74.7939px;line-height:1;font-family:'Gemunu Libre';-inkscape-font-specification:'Gemunu Libre Ultra-Bold';letter-spacing:-0.467462px;stroke-width:0.892116"
+         d="M 51.365767,51.587685 H 40.371063 l -2.243817,-11.293879 0.897527,0.747939 H 22.196146 L 23.093673,40.293806 20.55068,51.587685 H 10.229122 L 19.952329,12.694857 Q 20.849856,9.1795436 21.971764,7.2349022 23.093673,5.2154669 25.113108,4.392734 27.132543,3.5700011 30.573062,3.7195889 L 41.343384,4.0935584 Z M 29.002391,14.639498 24.96352,32.290859 24.365169,31.54292 h 12.789757 l -0.598352,0.747939 -3.664901,-18.698475 h -2.842168 q -0.523557,0 -0.747939,0.224381 -0.149588,0.224382 -0.299175,0.822733 z M 66.006693,51.587685 H 55.385959 V 1.1018024 H 66.006693 Z M 93.886179,14.938674 v 8.227329 h -8.975267 l 0.747939,-0.747939 v 19.147238 q 0,1.047115 1.047114,1.047115 h 7.180214 v 8.975268 H 87.75308 q -6.731451,0 -9.723207,-2.617787 -2.991756,-2.69258 -2.991756,-8.601298 V 22.418064 l 0.747939,0.747939 h -4.487634 v -8.227329 h 4.487634 l -0.747939,0.747939 V 5.5894364 H 85.658851 V 15.686613 l -0.747939,-0.747939 z"
+         id="text1"
+         aria-label="Alt" />
+    </g>
+  </g>
+</svg>

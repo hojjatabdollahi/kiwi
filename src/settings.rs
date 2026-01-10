@@ -7,7 +7,7 @@ use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::widget::scrollable;
 
-use crate::config::{KeyDisplayMode, OverlayPosition, PaletteType, APP_VERSION};
+use crate::config::{IconStyle, KeyDisplayMode, OverlayPosition, PaletteType, APP_VERSION};
 use crate::keystroke::{keystroke_widget, Keystroke};
 use crate::position_selector::PositionSelector;
 use crate::Message;
@@ -31,6 +31,7 @@ pub fn settings_view(
     palette: PaletteType,
     position: OverlayPosition,
     key_display_mode: KeyDisplayMode,
+    icon_style: IconStyle,
     history_count: u8,
     is_active: bool,
 ) -> Element<'static, Message> {
@@ -51,6 +52,7 @@ pub fn settings_view(
         palette,
         false,    // fade_enabled = false for static preview
         position, // Use current position setting for preview
+        icon_style,
     );
 
     // Checkerboard background for transparency preview
@@ -110,6 +112,27 @@ pub fn settings_view(
             ),
         );
 
+    // Icon Style radio buttons
+    let icon_style_section = widget::column()
+        .spacing(4)
+        .push(widget::text::body("Icon Style"))
+        .push(
+            widget::row()
+                .spacing(15)
+                .push(widget::radio(
+                    IconStyle::Symbol.name(),
+                    IconStyle::Symbol,
+                    Some(icon_style),
+                    Message::SetIconStyle,
+                ))
+                .push(widget::radio(
+                    IconStyle::Text.name(),
+                    IconStyle::Text,
+                    Some(icon_style),
+                    Message::SetIconStyle,
+                )),
+        );
+
     let content = widget::column()
         .padding(10)
         .spacing(8)
@@ -127,6 +150,8 @@ pub fn settings_view(
         .push(widget::divider::horizontal::default())
         // Key Display Mode section
         .push(display_mode_section)
+        // Icon Style section
+        .push(icon_style_section)
         // Separator
         .push(widget::divider::horizontal::default())
         // Preview in fixed container (centered)
