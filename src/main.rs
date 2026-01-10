@@ -171,7 +171,15 @@ impl cosmic::Application for KiwiApp {
             context_page: ContextPage::default(),
         };
 
-        (app, Task::none())
+        // Load bundled font
+        let font_task = keystroke::load_font().map(|result| {
+            if let Err(e) = result {
+                log::warn!("Failed to load bundled font: {:?}", e);
+            }
+            cosmic::Action::None
+        });
+
+        (app, font_task)
     }
 
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {

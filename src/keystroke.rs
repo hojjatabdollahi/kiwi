@@ -3,6 +3,12 @@
 use std::time::Instant;
 
 use crate::config::{IconStyle, OverlayPosition, Palette, PaletteType};
+
+// Bundled font for keystroke text
+const FONT_BYTES: &[u8] = include_bytes!("../data/GemunuLibre-VariableFont_wght.ttf");
+
+/// Font name constant for the bundled Gemunu Libre font
+pub const FONT_NAME: &str = "Gemunu Libre";
 use cosmic::iced::{self, gradient, Background, Border, Color, Length};
 use cosmic::iced_widget::container;
 use cosmic::iced_widget::svg::{self, Svg};
@@ -353,6 +359,11 @@ fn get_icon_for_key_with_style(key: &str, icon_style: IconStyle) -> Option<(&'st
     }
 }
 
+/// Load the bundled font (call once at startup)
+pub fn load_font() -> cosmic::iced::Task<Result<(), cosmic::iced::font::Error>> {
+    cosmic::iced::font::load(std::borrow::Cow::Borrowed(FONT_BYTES))
+}
+
 /// Creates the content element for a key - either an icon or text
 fn key_content<'a, M: 'a>(
     key: &str,
@@ -378,9 +389,14 @@ fn key_content<'a, M: 'a>(
 
         svg.into()
     } else {
-        // Use text
+        // Use bundled Gemunu Libre font with bold weight
         text::Text::new(key.to_string())
             .size(font_size)
+            .font(cosmic::iced::Font {
+                family: cosmic::iced::font::Family::Name(FONT_NAME),
+                weight: cosmic::iced::font::Weight::Bold,
+                ..Default::default()
+            })
             .class(cosmic::theme::Text::Color(text_color))
             .align_x(iced::alignment::Horizontal::Center)
             .align_y(iced::alignment::Vertical::Center)
