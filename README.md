@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="data/icons/kiwi-on.svg" alt="Kiwi Logo" width="128">
+</p>
+
 # Kiwi
 
 A key visualizer for [COSMIC DE](https://github.com/pop-os/cosmic-epoch). Shows an overlay of your keystrokes, mouse clicks, and gestures.
@@ -75,6 +79,9 @@ Settings are stored via cosmic-config and can be accessed through the tray icon 
 ## Security
 
 Adding yourself to the `input` group grants read access to all input devices (`/dev/input/*`). This means any program you run can read all keystrokes, including passwords. Only do this on systems you trust and where you control what software runs.
+
+## Why Kiwi?
+It's a Key Visualizer!
 
 ## License
 
