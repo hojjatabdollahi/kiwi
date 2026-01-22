@@ -82,7 +82,3 @@ Adding yourself to the `input` group grants read access to all input devices (`/
 
 ## Why Kiwi?
 It's a Key Visualizer!
-
-## License
-
-GPL-3.0-or-later
