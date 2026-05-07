@@ -1,13 +1,16 @@
 //! Input capture wrapper and event processing
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use crossbeam_channel::Receiver as CbReceiver;
 use evdev::KeyCode;
 use xkbcommon::xkb;
 
 use crate::capture::{Axis, ButtonState, InputCapture, InputEvent, KeyState, SwipeDirection};
 use crate::config::KeyDisplayMode;
+use crate::cosmic_xkb::XkbConfig;
 use crate::keystroke::{KeyModifiers, Keystroke};
 use crate::overlay::{push_history, SharedState};
 
@@ -17,20 +20,29 @@ struct XkbState {
 }
 
 impl XkbState {
-    /// Create a new XKB state using the current keyboard layout
-    fn new() -> Option<Self> {
+    /// Create a new XKB state using COSMIC Comp's active input source.
+    fn new(config: &XkbConfig) -> Option<Self> {
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let source = config.active_source();
         let keymap = xkb::Keymap::new_from_names(
             &context,
-            "",   // rules (empty = default)
-            "",   // model (empty = default)
-            "",   // layout (empty = current)
-            "",   // variant (empty = default)
-            None, // options
+            source.rules,
+            source.model,
+            source.layout,
+            source.variant,
+            source.options.map(str::to_string),
             xkb::COMPILE_NO_FLAGS,
         )?;
         let state = xkb::State::new(&keymap);
         Some(Self { state })
+    }
+
+    fn with_pressed_keys(config: &XkbConfig, pressed_keys: &HashSet<u32>) -> Option<Self> {
+        let mut state = Self::new(config)?;
+        for key in pressed_keys {
+            state.update_key(*key, true);
+        }
+        Some(state)
     }
 
     /// Get the typed character for a key press with current modifiers
@@ -208,28 +220,54 @@ pub fn is_modifier(key: u32) -> bool {
 pub fn spawn_input_capture(
     state: Arc<Mutex<SharedState>>,
     tray_tx: crossbeam_channel::Sender<crate::tray::TrayAction>,
+    initial_xkb_config: XkbConfig,
+    xkb_config_rx: CbReceiver<XkbConfig>,
 ) {
     thread::spawn(move || {
         match InputCapture::new() {
             Ok(mut capture) => {
                 log::info!("Input capture started");
 
-                // Initialize XKB state for character lookup
-                let mut xkb_state = XkbState::new();
+                let mut current_xkb_config = initial_xkb_config;
+                let mut pressed_keys = HashSet::new();
+                let mut xkb_state = XkbState::new(&current_xkb_config);
                 if xkb_state.is_none() {
                     log::warn!(
-                        "Failed to initialize XKB state, falling back to physical key names"
+                        "Failed to initialize XKB state from COSMIC Comp config, falling back to physical key names"
                     );
                 }
 
                 loop {
+                    for config in xkb_config_rx.try_iter() {
+                        current_xkb_config = config;
+                        xkb_state = XkbState::with_pressed_keys(&current_xkb_config, &pressed_keys);
+                        if xkb_state.is_some() {
+                            let source = current_xkb_config.active_source();
+                            log::info!(
+                                "Updated XKB config: layout='{}' variant='{}'",
+                                source.layout,
+                                source.variant
+                            );
+                        } else {
+                            log::warn!(
+                                "Failed to update XKB state from COSMIC Comp config, falling back to physical key names"
+                            );
+                        }
+                    }
+
                     if let Err(e) = capture.dispatch() {
                         log::error!("Input dispatch error: {}", e);
                         break;
                     }
 
                     for event in capture.events() {
-                        process_input_event(&state, event, &mut xkb_state, &tray_tx);
+                        process_input_event(
+                            &state,
+                            event,
+                            &mut xkb_state,
+                            &mut pressed_keys,
+                            &tray_tx,
+                        );
                     }
 
                     // Small sleep to prevent busy-waiting
@@ -248,6 +286,7 @@ fn process_input_event(
     state: &Arc<Mutex<SharedState>>,
     event: InputEvent,
     xkb_state: &mut Option<XkbState>,
+    pressed_keys: &mut HashSet<u32>,
     tray_tx: &crossbeam_channel::Sender<crate::tray::TrayAction>,
 ) {
     match event {
@@ -255,6 +294,15 @@ fn process_input_event(
             key,
             state: key_state,
         } => {
+            match key_state {
+                KeyState::Pressed => {
+                    pressed_keys.insert(key);
+                }
+                KeyState::Released => {
+                    pressed_keys.remove(&key);
+                }
+            }
+
             // Get display mode and enabled state first
             let (enabled, display_mode, show_keyboard) = {
                 if let Ok(s) = state.lock() {

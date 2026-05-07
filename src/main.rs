@@ -2,6 +2,7 @@
 
 mod capture;
 mod config;
+mod cosmic_xkb;
 mod input;
 mod keystroke;
 mod overlay;
@@ -76,6 +77,8 @@ struct KiwiApp {
     tray_handle: Option<tray::TrayHandle>,
     /// Shared state for overlay (keystrokes, modifiers, etc.)
     shared_state: Arc<Mutex<SharedState>>,
+    /// Sends COSMIC Comp XKB config changes to the input thread.
+    xkb_config_tx: CbSender<cosmic_xkb::XkbConfig>,
     /// Wayland outputs with layer surfaces
     outputs: Vec<OutputState>,
     /// Current context page for context drawer
@@ -110,6 +113,7 @@ pub enum Message {
     SetShowGestures(bool),
     SaveConfig,
     ConfigChanged(Config),
+    CosmicCompConfigChanged(cosmic_xkb::CosmicCompConfig),
     // Context drawer
     ToggleContextPage(ContextPage),
     LaunchUrl(String),
@@ -156,9 +160,18 @@ impl cosmic::Application for KiwiApp {
             config.show_gestures,
         )));
 
+        let initial_xkb_config = cosmic_xkb::load_current_config();
+        let (xkb_config_tx, xkb_config_rx) =
+            crossbeam_channel::unbounded::<cosmic_xkb::XkbConfig>();
+
         // Always start input capture (it checks enabled state internally)
         // Pass a clone of the tray sender so input thread can trigger deactivation
-        input::spawn_input_capture(shared_state.clone(), flags.tray_tx.clone());
+        input::spawn_input_capture(
+            shared_state.clone(),
+            flags.tray_tx.clone(),
+            initial_xkb_config,
+            xkb_config_rx,
+        );
 
         // Create tray icon
         let tray_handle = tray::create_tray(config.enabled, flags.tray_tx);
@@ -180,6 +193,7 @@ impl cosmic::Application for KiwiApp {
             tray_rx: flags.tray_rx,
             tray_handle: Some(tray_handle),
             shared_state,
+            xkb_config_tx,
             outputs: Vec::new(),
             context_page: ContextPage::default(),
             about,
@@ -278,6 +292,20 @@ impl cosmic::Application for KiwiApp {
             self.core()
                 .watch_config::<Config>(APP_ID)
                 .map(|update| Message::ConfigChanged(update.config)),
+            // Watch COSMIC Comp's input-source config. The input-source applet
+            // moves the active source to the first layout/variant pair.
+            self.core()
+                .watch_config::<cosmic_xkb::CosmicCompConfig>(cosmic_xkb::COSMIC_COMP_APP_ID)
+                .map(|update| {
+                    if !update.errors.is_empty() {
+                        log::warn!(
+                            "Errors loading COSMIC Comp config {:?}: {:?}",
+                            update.keys,
+                            update.errors
+                        );
+                    }
+                    Message::CosmicCompConfigChanged(update.config)
+                }),
             // Tray actions subscription
             tray_subscription(self.tray_rx.clone()),
             // Wayland output events
@@ -481,6 +509,17 @@ impl cosmic::Application for KiwiApp {
                 // Update shared state - layout positioning is handled in view
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.update_from_config(&config);
+                }
+            }
+            Message::CosmicCompConfigChanged(config) => {
+                let source = config.xkb_config.active_source();
+                log::info!(
+                    "COSMIC input source changed: layout='{}' variant='{}'",
+                    source.layout,
+                    source.variant
+                );
+                if let Err(e) = self.xkb_config_tx.send(config.xkb_config) {
+                    log::warn!("Failed to send XKB config update to input thread: {}", e);
                 }
             }
             Message::WindowOpened(id) => {
