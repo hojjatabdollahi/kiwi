@@ -2,17 +2,18 @@
 
 use std::sync::{Arc, Mutex};
 
-use cosmic::iced::{window, Limits};
-use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
+use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
+use cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface;
+use cosmic::iced::{window, Limits};
+use cosmic::surface::action::{app_layer_shell, LiveSettings};
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use wayland_client::protocol::wl_output::WlOutput;
 
 use crate::config::{IconStyle, OverlayPosition, PaletteType};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke};
-use crate::Message;
+use crate::{KiwiApp, Message};
 
 /// Maximum number of keystrokes in history
 pub const MAX_HISTORY: usize = 10;
@@ -163,16 +164,12 @@ pub struct OutputState {
     pub name: Option<String>,
 }
 
-/// Create a full-screen layer surface for an output
-/// Positioning is handled via layout in view_overlay, not surface positioning
-pub fn create_layer_surface_for_output(
-    output: &WlOutput,
-    id: window::Id,
-) -> cosmic::iced::Task<cosmic::Action<Message>> {
+/// Build the layer surface settings for a full-screen overlay on `output`.
+fn layer_surface_settings(output: &WlOutput, id: window::Id) -> SctkLayerSurfaceSettings {
     // Anchor to all edges = full screen
     let anchor = Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT;
 
-    get_layer_surface(SctkLayerSurfaceSettings {
+    SctkLayerSurfaceSettings {
         id,
         layer: Layer::Overlay,
         keyboard_interactivity: KeyboardInteractivity::None,
@@ -184,10 +181,39 @@ pub fn create_layer_surface_for_output(
         // None = compositor decides size (full screen when anchored to all edges)
         size: None,
         margin:
-            cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedMargin::default(),
+            cosmic::iced::platform_specific::runtime::wayland::layer_surface::IcedMargin::default(),
         exclusive_zone: -1,
         size_limits: Limits::NONE,
-    })
+    }
+}
+
+/// Create a full-screen layer surface for an output.
+/// Positioning is handled via layout in view_overlay, not surface positioning.
+///
+/// The surface is created through libcosmic's surface API (rather than the raw
+/// `get_layer_surface` command) so it is tracked by libcosmic with a per-surface
+/// blur override. Without `blur: Some(false)`, libcosmic auto-enables background
+/// blur on layer surfaces whenever the active COSMIC theme has the "frosted glass"
+/// effect on, which would frost the entire transparent, full-screen overlay and blur
+/// everything behind it. The override keeps the overlay transparent either way while
+/// leaving the settings window's normal frosted behavior untouched.
+pub fn create_layer_surface_for_output(
+    output: &WlOutput,
+    id: window::Id,
+) -> cosmic::iced::Task<cosmic::Action<Message>> {
+    let output = output.clone();
+    let action = app_layer_shell::<KiwiApp>(
+        |_app| LiveSettings {
+            blur: Some(false),
+            ..Default::default()
+        },
+        move |_app| layer_surface_settings(&output, id),
+        Some(Box::new(|app: &KiwiApp| {
+            view_overlay(&app.shared_state).map(cosmic::Action::App)
+        })),
+    );
+
+    cosmic::task::message(cosmic::Action::Cosmic(cosmic::app::Action::Surface(action)))
 }
 
 /// Destroy a layer surface
@@ -294,7 +320,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
 
     let content: cosmic::Element<'static, Message> = if keystrokes.is_empty() {
         // Empty widget when no keystrokes
-        cosmic::widget::Space::new(0, 0).into()
+        cosmic::widget::Space::new().into()
     } else {
         // Show keystrokes row
         keystrokes_row(
@@ -313,7 +339,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
     // This puts the rightmost key at screen center
     let positioned_content: cosmic::Element<'static, Message> =
         if position == OverlayPosition::BottomCenter {
-            cosmic::widget::row()
+            cosmic::widget::Row::new()
                 // Left half: content aligned to the right edge (screen center)
                 .push(
                     cosmic::widget::container(content)
@@ -321,9 +347,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
                         .align_x(cosmic::iced::alignment::Horizontal::Right),
                 )
                 // Right half: empty spacer (takes up right 50% of screen)
-                .push(cosmic::widget::Space::with_width(
-                    cosmic::iced::Length::FillPortion(1),
-                ))
+                .push(cosmic::widget::Space::new().width(cosmic::iced::Length::FillPortion(1)))
                 .into()
         } else {
             content

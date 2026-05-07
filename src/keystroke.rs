@@ -10,8 +10,8 @@ const FONT_BYTES: &[u8] = include_bytes!("../data/GemunuLibre-VariableFont_wght.
 /// Font name constant for the bundled Gemunu Libre font
 pub const FONT_NAME: &str = "Gemunu Libre";
 use cosmic::iced::{self, gradient, Background, Border, Color, Length};
-use cosmic::iced_widget::container;
-use cosmic::iced_widget::svg::{self, Svg};
+use cosmic::widget::container;
+use cosmic::widget::svg::{self, Svg};
 use cosmic::widget::{self, text};
 use cosmic::Element;
 
@@ -490,7 +490,9 @@ fn wrap_with_badge_area<'a, M: 'a>(
         .into()
     } else {
         // Invisible placeholder to reserve space
-        widget::Space::new(Length::Shrink, Length::Fixed(badge_height)).into()
+        widget::Space::new()
+            .height(Length::Fixed(badge_height))
+            .into()
     };
 
     // For bottom positions, badge goes above; for top positions, badge goes below
@@ -499,7 +501,7 @@ fn wrap_with_badge_area<'a, M: 'a>(
         OverlayPosition::BottomLeft | OverlayPosition::BottomRight | OverlayPosition::BottomCenter
     );
 
-    let mut col = widget::column()
+    let mut col = widget::Column::new()
         .align_x(iced::Alignment::Center)
         .spacing(spacing);
     if is_bottom {

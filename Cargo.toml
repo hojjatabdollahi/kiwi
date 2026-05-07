@@ -25,7 +25,7 @@ wayland-client = "0.31"
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", branch = "main" }
 
 # Input capture (libinput)
-input = "0.9"
+input = "0.10"
 udev = "0.9"
 libc = "0.2"
 evdev = "0.13.2"
@@ -48,6 +48,8 @@ features = [
   "about",
   "dbus-config",
   "multi-window",
+  # Needed to create the overlay layer surface with a per-surface blur override.
+  "surface-message",
   "tokio",
   "wayland",
   "winit",

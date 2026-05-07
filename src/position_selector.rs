@@ -1,11 +1,11 @@
 //! Widget for selecting overlay position with clickable corner and bottom regions
 
-use cosmic::iced::Size;
-use cosmic::iced_core::{
+use cosmic::iced::core::{
     layout::{self, Layout},
     renderer::Quad,
     Background, Border, Element, Length,
 };
+use cosmic::iced::Size;
 
 use crate::config::OverlayPosition;
 
@@ -40,7 +40,7 @@ impl<Msg: Clone> PositionSelector<Msg> {
         &self,
         x: f32,
         y: f32,
-        bounds: cosmic::iced_core::Rectangle,
+        bounds: cosmic::iced::core::Rectangle,
     ) -> Option<OverlayPosition> {
         let local_x = x - bounds.x;
         let local_y = y - bounds.y;
@@ -87,8 +87,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
     }
 
     fn layout(
-        &self,
-        _tree: &mut cosmic::iced_core::widget::Tree,
+        &mut self,
+        _tree: &mut cosmic::iced::core::widget::Tree,
         _renderer: &cosmic::Renderer,
         _limits: &cosmic::iced::Limits,
     ) -> layout::Node {
@@ -97,15 +97,15 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
 
     fn draw(
         &self,
-        _tree: &cosmic::iced_core::widget::Tree,
+        _tree: &cosmic::iced::core::widget::Tree,
         renderer: &mut cosmic::Renderer,
         theme: &cosmic::Theme,
-        _style: &cosmic::iced_core::renderer::Style,
+        _style: &cosmic::iced::core::renderer::Style,
         layout: Layout<'_>,
-        cursor: cosmic::iced_core::mouse::Cursor,
-        _viewport: &cosmic::iced_core::Rectangle,
+        cursor: cosmic::iced::core::mouse::Cursor,
+        _viewport: &cosmic::iced::core::Rectangle,
     ) {
-        use cosmic::iced_core::Renderer as _;
+        use cosmic::iced::core::Renderer as _;
 
         let bounds = layout.bounds();
         let cosmic_theme = theme.cosmic();
@@ -123,7 +123,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
                     width: 1.0,
                     color: border_color,
                 },
-                shadow: cosmic::iced_core::Shadow::default(),
+                shadow: cosmic::iced::core::Shadow::default(),
+                snap: true,
             },
             Background::Color(bg_color),
         );
@@ -162,7 +163,7 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         // Vertical part (full height)
         renderer.fill_quad(
             Quad {
-                bounds: cosmic::iced_core::Rectangle {
+                bounds: cosmic::iced::core::Rectangle {
                     x: inner_x,
                     y: inner_y,
                     width: thickness,
@@ -173,14 +174,15 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
                     width: 0.0,
                     color: cosmic::iced::Color::TRANSPARENT,
                 },
-                shadow: cosmic::iced_core::Shadow::default(),
+                shadow: cosmic::iced::core::Shadow::default(),
+                snap: true,
             },
             Background::Color(tl_color),
         );
         // Horizontal part (starts after vertical to avoid overlap)
         renderer.fill_quad(
             Quad {
-                bounds: cosmic::iced_core::Rectangle {
+                bounds: cosmic::iced::core::Rectangle {
                     x: inner_x + thickness,
                     y: inner_y,
                     width: corner_size - thickness,
@@ -191,7 +193,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
                     width: 0.0,
                     color: cosmic::iced::Color::TRANSPARENT,
                 },
-                shadow: cosmic::iced_core::Shadow::default(),
+                shadow: cosmic::iced::core::Shadow::default(),
+                snap: true,
             },
             Background::Color(tl_color),
         );
@@ -201,7 +204,7 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         // Vertical part (full height)
         renderer.fill_quad(
             Quad {
-                bounds: cosmic::iced_core::Rectangle {
+                bounds: cosmic::iced::core::Rectangle {
                     x: inner_x + inner_width - thickness,
                     y: inner_y,
                     width: thickness,
@@ -212,14 +215,15 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
                     width: 0.0,
                     color: cosmic::iced::Color::TRANSPARENT,
                 },
-                shadow: cosmic::iced_core::Shadow::default(),
+                shadow: cosmic::iced::core::Shadow::default(),
+                snap: true,
             },
             Background::Color(tr_color),
         );
         // Horizontal part (ends before vertical to avoid overlap)
         renderer.fill_quad(
             Quad {
-                bounds: cosmic::iced_core::Rectangle {
+                bounds: cosmic::iced::core::Rectangle {
                     x: inner_x + inner_width - corner_size,
                     y: inner_y,
                     width: corner_size - thickness,
@@ -230,7 +234,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
                     width: 0.0,
                     color: cosmic::iced::Color::TRANSPARENT,
                 },
-                shadow: cosmic::iced_core::Shadow::default(),
+                shadow: cosmic::iced::core::Shadow::default(),
+                snap: true,
             },
             Background::Color(tr_color),
         );
@@ -240,7 +245,7 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         // Vertical part (full height)
         renderer.fill_quad(
             Quad {
-                bounds: cosmic::iced_core::Rectangle {
+                bounds: cosmic::iced::core::Rectangle {
                     x: inner_x,
                     y: inner_y + inner_height - corner_size,
                     width: thickness,
@@ -251,14 +256,15 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
                     width: 0.0,
                     color: cosmic::iced::Color::TRANSPARENT,
                 },
-                shadow: cosmic::iced_core::Shadow::default(),
+                shadow: cosmic::iced::core::Shadow::default(),
+                snap: true,
             },
             Background::Color(bl_color),
         );
         // Horizontal part (starts after vertical to avoid overlap)
         renderer.fill_quad(
             Quad {
-                bounds: cosmic::iced_core::Rectangle {
+                bounds: cosmic::iced::core::Rectangle {
                     x: inner_x + thickness,
                     y: inner_y + inner_height - thickness,
                     width: corner_size - thickness,
@@ -269,7 +275,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
                     width: 0.0,
                     color: cosmic::iced::Color::TRANSPARENT,
                 },
-                shadow: cosmic::iced_core::Shadow::default(),
+                shadow: cosmic::iced::core::Shadow::default(),
+                snap: true,
             },
             Background::Color(bl_color),
         );
@@ -279,7 +286,7 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         // Vertical part (full height)
         renderer.fill_quad(
             Quad {
-                bounds: cosmic::iced_core::Rectangle {
+                bounds: cosmic::iced::core::Rectangle {
                     x: inner_x + inner_width - thickness,
                     y: inner_y + inner_height - corner_size,
                     width: thickness,
@@ -290,14 +297,15 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
                     width: 0.0,
                     color: cosmic::iced::Color::TRANSPARENT,
                 },
-                shadow: cosmic::iced_core::Shadow::default(),
+                shadow: cosmic::iced::core::Shadow::default(),
+                snap: true,
             },
             Background::Color(br_color),
         );
         // Horizontal part (ends before vertical to avoid overlap)
         renderer.fill_quad(
             Quad {
-                bounds: cosmic::iced_core::Rectangle {
+                bounds: cosmic::iced::core::Rectangle {
                     x: inner_x + inner_width - corner_size,
                     y: inner_y + inner_height - thickness,
                     width: corner_size - thickness,
@@ -308,7 +316,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
                     width: 0.0,
                     color: cosmic::iced::Color::TRANSPARENT,
                 },
-                shadow: cosmic::iced_core::Shadow::default(),
+                shadow: cosmic::iced::core::Shadow::default(),
+                snap: true,
             },
             Background::Color(br_color),
         );
@@ -319,7 +328,7 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
         let center_x = inner_x + (inner_width - center_width) / 2.0;
         renderer.fill_quad(
             Quad {
-                bounds: cosmic::iced_core::Rectangle {
+                bounds: cosmic::iced::core::Rectangle {
                     x: center_x,
                     y: inner_y + inner_height - thickness,
                     width: center_width,
@@ -330,7 +339,8 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
                     width: 0.0,
                     color: cosmic::iced::Color::TRANSPARENT,
                 },
-                shadow: cosmic::iced_core::Shadow::default(),
+                shadow: cosmic::iced::core::Shadow::default(),
+                snap: true,
             },
             Background::Color(bc_color),
         );
@@ -338,44 +348,42 @@ impl<Msg: Clone + 'static> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Re
 
     fn mouse_interaction(
         &self,
-        _state: &cosmic::iced_core::widget::Tree,
+        _state: &cosmic::iced::core::widget::Tree,
         layout: Layout<'_>,
-        cursor: cosmic::iced_core::mouse::Cursor,
-        _viewport: &cosmic::iced_core::Rectangle,
+        cursor: cosmic::iced::core::mouse::Cursor,
+        _viewport: &cosmic::iced::core::Rectangle,
         _renderer: &cosmic::Renderer,
-    ) -> cosmic::iced_core::mouse::Interaction {
+    ) -> cosmic::iced::core::mouse::Interaction {
         if let Some(pos) = cursor.position() {
             if self.get_region(pos.x, pos.y, layout.bounds()).is_some() {
-                return cosmic::iced_core::mouse::Interaction::Pointer;
+                return cosmic::iced::core::mouse::Interaction::Pointer;
             }
         }
-        cosmic::iced_core::mouse::Interaction::default()
+        cosmic::iced::core::mouse::Interaction::default()
     }
 
-    fn on_event(
+    fn update(
         &mut self,
-        _state: &mut cosmic::iced_core::widget::Tree,
-        event: cosmic::iced_core::Event,
+        _state: &mut cosmic::iced::core::widget::Tree,
+        event: &cosmic::iced::core::Event,
         layout: Layout<'_>,
-        cursor: cosmic::iced_core::mouse::Cursor,
+        cursor: cosmic::iced::core::mouse::Cursor,
         _renderer: &cosmic::Renderer,
-        _clipboard: &mut dyn cosmic::iced_core::Clipboard,
-        shell: &mut cosmic::iced_core::Shell<'_, Msg>,
-        _viewport: &cosmic::iced_core::Rectangle,
-    ) -> cosmic::iced_core::event::Status {
-        if let cosmic::iced_core::Event::Mouse(cosmic::iced_core::mouse::Event::ButtonPressed(
-            cosmic::iced_core::mouse::Button::Left,
+        _clipboard: &mut dyn cosmic::iced::core::Clipboard,
+        shell: &mut cosmic::iced::core::Shell<'_, Msg>,
+        _viewport: &cosmic::iced::core::Rectangle,
+    ) {
+        if let cosmic::iced::core::Event::Mouse(cosmic::iced::core::mouse::Event::ButtonPressed(
+            cosmic::iced::core::mouse::Button::Left,
         )) = event
         {
             if let Some(pos) = cursor.position() {
                 if let Some(region) = self.get_region(pos.x, pos.y, layout.bounds()) {
                     let msg = (self.on_select)(region);
                     shell.publish(msg);
-                    return cosmic::iced_core::event::Status::Captured;
                 }
             }
         }
-        cosmic::iced_core::event::Status::Ignored
     }
 }
 

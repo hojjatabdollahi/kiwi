@@ -1,11 +1,11 @@
 //! Settings window view and related logic
 
 use cosmic::iced::{Color, Length};
-use cosmic::iced_widget::svg;
-use cosmic::iced_widget::Svg;
 use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::widget::scrollable;
+use cosmic::widget::svg;
+use cosmic::widget::Svg;
 
 use crate::config::{IconStyle, KeyDisplayMode, OverlayPosition, PaletteType, APP_VERSION};
 use crate::keystroke::{keystroke_widget, Keystroke};
@@ -90,11 +90,11 @@ pub fn settings_view(
         .align_x(cosmic::iced::alignment::Horizontal::Center);
 
     // Key Display Mode radio buttons
-    let display_mode_section = widget::column()
+    let display_mode_section = widget::Column::new()
         .spacing(4)
         .push(widget::text::body("Key Display Mode"))
         .push(
-            widget::row()
+            widget::Row::new()
                 .spacing(15)
                 .push(widget::radio(
                     KeyDisplayMode::TypedCharacter.name(),
@@ -116,11 +116,11 @@ pub fn settings_view(
         );
 
     // Icon Style radio buttons
-    let icon_style_section = widget::column()
+    let icon_style_section = widget::Column::new()
         .spacing(4)
         .push(widget::text::body("Icon Style"))
         .push(
-            widget::row()
+            widget::Row::new()
                 .spacing(15)
                 .push(widget::radio(
                     IconStyle::Symbol.name(),
@@ -137,45 +137,45 @@ pub fn settings_view(
         );
 
     // Input sources section
-    let input_sources_section = widget::column()
+    let input_sources_section = widget::Column::new()
         .spacing(6)
         .push(widget::text::body("Input Sources"))
         .push(
-            widget::row()
+            widget::Row::new()
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(widget::text::caption("Keyboard"))
-                .push(widget::Space::with_width(Length::Fill))
+                .push(widget::Space::new().width(Length::Fill))
                 .push(widget::toggler(show_keyboard).on_toggle(Message::SetShowKeyboard)),
         )
         .push(
-            widget::row()
+            widget::Row::new()
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(widget::text::caption("Mouse"))
-                .push(widget::Space::with_width(Length::Fill))
+                .push(widget::Space::new().width(Length::Fill))
                 .push(widget::toggler(show_mouse).on_toggle(Message::SetShowMouse)),
         )
         .push(
-            widget::row()
+            widget::Row::new()
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(widget::text::caption("Gestures"))
-                .push(widget::Space::with_width(Length::Fill))
+                .push(widget::Space::new().width(Length::Fill))
                 .push(widget::toggler(show_gestures).on_toggle(Message::SetShowGestures)),
         );
 
-    let content = widget::column()
+    let content = widget::Column::new()
         .padding(10)
         .spacing(8)
         .max_width(300.0)
         // Active toggle at top
         .push(
-            widget::row()
+            widget::Row::new()
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(widget::text::body("Active"))
-                .push(widget::Space::with_width(Length::Fill))
+                .push(widget::Space::new().width(Length::Fill))
                 .push(widget::toggler(is_active).on_toggle(Message::ToggleActive)),
         )
         // Separator
@@ -194,7 +194,7 @@ pub fn settings_view(
         .push(preview_container)
         // Size slider and Theme dropdown on same row
         .push(
-            widget::row()
+            widget::Row::new()
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(widget::tooltip(
@@ -212,7 +212,7 @@ pub fn settings_view(
         .push(widget::divider::horizontal::default())
         // Fade slider
         .push(
-            widget::row()
+            widget::Row::new()
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(widget::text::body(format!("Fade: {:.1}s", fade_duration)))
@@ -223,7 +223,7 @@ pub fn settings_view(
         )
         // History count slider
         .push(
-            widget::row()
+            widget::Row::new()
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(widget::text::body(format!("History: {}", history_count)))
@@ -259,7 +259,7 @@ pub fn settings_view(
     .clip(true);
 
     // Main layout: scrollable content + version at bottom right
-    widget::column()
+    widget::Column::new()
         .push(scrollable_content)
         .push(
             widget::container(version_text)

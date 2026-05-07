@@ -1,11 +1,7 @@
 //! System tray icon using StatusNotifierItem (ksni)
 
 use crossbeam_channel::Sender;
-use ksni::{
-    blocking::TrayMethods,
-    menu::StandardItem,
-    Icon, MenuItem, Tray,
-};
+use ksni::{blocking::TrayMethods, menu::StandardItem, Icon, MenuItem, Tray};
 
 /// Embedded PNG icons at multiple sizes for proper scaling
 const ICON_ON_16: &[u8] = include_bytes!("../data/icons/kiwi-on-16.png");
@@ -47,7 +43,12 @@ impl KiwiTray {
                 ICON_ON_16, ICON_ON_22, ICON_ON_24, ICON_ON_32, ICON_ON_48, ICON_ON_64,
             ]),
             icon_off: load_all_icons(&[
-                ICON_OFF_16, ICON_OFF_22, ICON_OFF_24, ICON_OFF_32, ICON_OFF_48, ICON_OFF_64,
+                ICON_OFF_16,
+                ICON_OFF_22,
+                ICON_OFF_24,
+                ICON_OFF_32,
+                ICON_OFF_48,
+                ICON_OFF_64,
             ]),
         }
     }

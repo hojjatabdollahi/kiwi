@@ -11,14 +11,15 @@ mod settings;
 mod tray;
 
 use std::any::TypeId;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
+use cosmic::iced::core::event::wayland::OutputEvent;
+use cosmic::iced::event::listen_with;
+use cosmic::iced::futures::{SinkExt, StreamExt};
 use cosmic::iced::Size;
 use cosmic::iced::{window, Subscription};
-use cosmic::iced_core::event::wayland::OutputEvent;
-use cosmic::iced_futures::event::listen_with;
-use cosmic::iced_futures::futures::{SinkExt, StreamExt};
 use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::widget::about::About;
@@ -137,7 +138,17 @@ impl cosmic::Application for KiwiApp {
         &mut self.core
     }
 
-    fn init(core: cosmic::Core, flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
+    fn init(
+        mut core: cosmic::Core,
+        flags: Self::Flags,
+    ) -> (Self, Task<cosmic::Action<Self::Message>>) {
+        // Don't auto-apply a corner radius to layer surfaces. Our overlay is a
+        // full-screen layer surface; libcosmic otherwise sends a corner-radius
+        // request for it (auto_corner_radius includes `System`), which cosmic-comp
+        // rejects with a "corner radius too large" protocol error, killing the
+        // Wayland connection. Window/popup corner radii are left untouched.
+        core.set_auto_corner_radius(cosmic::core::Auto::Window | cosmic::core::Auto::Popup);
+
         // Load config
         let config_handler = cosmic_config::Config::new(APP_ID, Config::VERSION).ok();
         let config = config_handler
@@ -244,6 +255,28 @@ impl cosmic::Application for KiwiApp {
         Some(Message::WindowClosed(id))
     }
 
+    // Always use a transparent app background (the surface clear color).
+    //
+    // libcosmic's default `style()` switches the clear color to an opaque
+    // `bg_color` when `window.is_maximized`. With this libcosmic + wayland/wgpu
+    // setup, that opaque-background path renders the maximized window as a blank
+    // fill with no content drawn (the widgets are still there and interactive,
+    // just not painted). Forcing the same transparent clear color used for
+    // non-maximized windows fixes it: the content container paints its own
+    // background (opaque when frosted glass is off, translucent-over-blur when
+    // on), so maximized renders identically to windowed.
+    //
+    // `is_maximized` is global, so this also keeps the transparent overlay
+    // transparent while the settings window is maximized.
+    fn style(&self) -> Option<cosmic::iced::theme::Style> {
+        let theme = cosmic::theme::active();
+        Some(cosmic::iced::theme::Style {
+            background_color: cosmic::iced::Color::TRANSPARENT,
+            icon_color: theme.cosmic().on_bg_color().into(),
+            text_color: theme.cosmic().on_bg_color().into(),
+        })
+    }
+
     fn view(&self) -> Element<'_, Self::Message> {
         // This is for the settings window (main window when open)
         settings::settings_view(
@@ -310,9 +343,9 @@ impl cosmic::Application for KiwiApp {
             tray_subscription(self.tray_rx.clone()),
             // Wayland output events
             listen_with(|event, _, _| {
-                if let cosmic::iced_core::Event::PlatformSpecific(
-                    cosmic::iced_core::event::PlatformSpecific::Wayland(
-                        cosmic::iced_core::event::wayland::Event::Output(output_event, wl_output),
+                if let cosmic::iced::core::Event::PlatformSpecific(
+                    cosmic::iced::core::event::PlatformSpecific::Wayland(
+                        cosmic::iced::core::event::wayland::Event::Output(output_event, wl_output),
                     ),
                 ) = event
                 {
@@ -562,30 +595,40 @@ impl cosmic::Application for KiwiApp {
 }
 
 fn tray_subscription(rx: CbReceiver<tray::TrayAction>) -> Subscription<Message> {
-    use cosmic::iced_futures::Subscription;
+    use cosmic::iced::Subscription;
 
     struct TraySub;
+    struct TrayRx(CbReceiver<tray::TrayAction>);
 
-    Subscription::run_with_id(
-        TypeId::of::<TraySub>(),
-        cosmic::iced::stream::channel(10, move |mut output| async move {
-            // Bridge the blocking crossbeam receiver into an async stream.
-            let (mut tx, mut async_rx) =
-                cosmic::iced_futures::futures::channel::mpsc::channel::<tray::TrayAction>(10);
+    impl Hash for TrayRx {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            TypeId::of::<TraySub>().hash(state);
+        }
+    }
 
-            std::thread::spawn(move || {
-                for action in rx.iter() {
-                    let _ = tx.try_send(action);
+    Subscription::run_with(TrayRx(rx), |TrayRx(rx)| {
+        let rx = rx.clone();
+        cosmic::iced::stream::channel(
+            10,
+            move |mut output: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
+                // Bridge the blocking crossbeam receiver into an async stream.
+                let (mut tx, mut async_rx) =
+                    cosmic::iced::futures::channel::mpsc::channel::<tray::TrayAction>(10);
+
+                std::thread::spawn(move || {
+                    for action in rx.iter() {
+                        let _ = tx.try_send(action);
+                    }
+                });
+
+                while let Some(action) = async_rx.next().await {
+                    if output.send(Message::TrayAction(action)).await.is_err() {
+                        break;
+                    }
                 }
-            });
-
-            while let Some(action) = async_rx.next().await {
-                if output.send(Message::TrayAction(action)).await.is_err() {
-                    break;
-                }
-            }
-        }),
-    )
+            },
+        )
+    })
 }
 
 impl KiwiApp {
