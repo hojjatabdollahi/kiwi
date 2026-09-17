@@ -90,7 +90,19 @@ pub enum InputEvent {
     },
     /// Multi-finger hold/tap gesture (3+ fingers held briefly without movement)
     Hold { finger_count: i32 },
+    /// Touchscreen contact started. Coordinates are normalized to 0.0..1.0 of the
+    /// touch device's area, so the overlay can scale them to whatever size it is.
+    TouchDown { slot: u32, x: f32, y: f32 },
+    /// Touchscreen contact moved (normalized coordinates)
+    TouchMotion { slot: u32, x: f32, y: f32 },
+    /// Touchscreen contact ended (lifted or cancelled)
+    TouchUp { slot: u32 },
 }
+
+/// Resolution used to turn libinput's device coordinates into 0.0..1.0 values.
+/// libinput only offers `*_transformed(width)`, so we transform against a large
+/// integer and divide, rather than tracking the real output size here.
+const TOUCH_NORMALIZE: u32 = 10_000;
 
 /// Tracks ongoing swipe gesture state
 #[derive(Debug, Default)]
@@ -357,6 +369,39 @@ impl InputCapture {
                             }
                         }
                         _ => {} // Ignore pinch
+                    }
+                }
+                Event::Touch(touch_event) => {
+                    use input::event::touch::{TouchEvent, TouchEventPosition, TouchEventSlot};
+
+                    let norm = TOUCH_NORMALIZE as f64;
+                    match touch_event {
+                        TouchEvent::Down(ref down) => {
+                            results.push(InputEvent::TouchDown {
+                                slot: down.seat_slot(),
+                                x: (down.x_transformed(TOUCH_NORMALIZE) / norm) as f32,
+                                y: (down.y_transformed(TOUCH_NORMALIZE) / norm) as f32,
+                            });
+                        }
+                        TouchEvent::Motion(ref motion) => {
+                            results.push(InputEvent::TouchMotion {
+                                slot: motion.seat_slot(),
+                                x: (motion.x_transformed(TOUCH_NORMALIZE) / norm) as f32,
+                                y: (motion.y_transformed(TOUCH_NORMALIZE) / norm) as f32,
+                            });
+                        }
+                        TouchEvent::Up(ref up) => {
+                            results.push(InputEvent::TouchUp {
+                                slot: up.seat_slot(),
+                            });
+                        }
+                        TouchEvent::Cancel(ref cancel) => {
+                            results.push(InputEvent::TouchUp {
+                                slot: cancel.seat_slot(),
+                            });
+                        }
+                        // Frame events just delimit a set of touch points
+                        _ => {}
                     }
                 }
                 _ => {}

@@ -238,7 +238,7 @@ fn color_with_opacity(color: Color, opacity: f32) -> Color {
 
 /// User configuration - persisted via cosmic-config
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, CosmicConfigEntry)]
-#[version = 8]
+#[version = 9]
 pub struct Config {
     /// Whether keystroke visualization is enabled
     pub enabled: bool,
@@ -262,6 +262,8 @@ pub struct Config {
     pub show_mouse: bool,
     /// Show touchpad gestures (taps, swipes, multi-finger)
     pub show_gestures: bool,
+    /// Show touchscreen contacts (a marker wherever a finger touches)
+    pub show_touch: bool,
 }
 
 impl Default for Config {
@@ -278,6 +280,7 @@ impl Default for Config {
             show_keyboard: true,
             show_mouse: true,
             show_gestures: true,
+            show_touch: true,
         }
     }
 }

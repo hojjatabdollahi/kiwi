@@ -4,7 +4,7 @@
 
 # Kiwi
 
-A key visualizer for [COSMIC DE](https://github.com/pop-os/cosmic-epoch). Shows an overlay of your keystrokes, mouse clicks, and gestures.
+A key visualizer for [COSMIC DE](https://github.com/pop-os/cosmic-epoch). Shows an overlay of your keystrokes, mouse clicks, gestures, and touchscreen input.
 
 ![Kiwi Demo](data/kiwi.gif)
 
@@ -13,6 +13,7 @@ A key visualizer for [COSMIC DE](https://github.com/pop-os/cosmic-epoch). Shows 
 - Real-time keystroke visualization overlay
 - Mouse button and scroll wheel display
 - Touchpad gesture recognition (swipes, holds)
+- Touchscreen contact markers (shows where your fingers are touching)
 - System tray integration
 - Configurable position, size, colors, and ...
 - Multiple color palettes

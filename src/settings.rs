@@ -37,6 +37,7 @@ pub fn settings_view(
     show_keyboard: bool,
     show_mouse: bool,
     show_gestures: bool,
+    show_touch: bool,
 ) -> Element<'static, Message> {
     // Find current selection index
     let current_index = PaletteType::ALL.iter().position(|p| *p == palette);
@@ -163,6 +164,14 @@ pub fn settings_view(
                 .push(widget::text::caption("Gestures"))
                 .push(widget::Space::new().width(Length::Fill))
                 .push(widget::toggler(show_gestures).on_toggle(Message::SetShowGestures)),
+        )
+        .push(
+            widget::Row::new()
+                .spacing(10)
+                .align_y(cosmic::iced::Alignment::Center)
+                .push(widget::text::caption("Touchscreen"))
+                .push(widget::Space::new().width(Length::Fill))
+                .push(widget::toggler(show_touch).on_toggle(Message::SetShowTouch)),
         );
 
     let content = widget::Column::new()

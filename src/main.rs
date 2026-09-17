@@ -112,6 +112,7 @@ pub enum Message {
     SetShowKeyboard(bool),
     SetShowMouse(bool),
     SetShowGestures(bool),
+    SetShowTouch(bool),
     SaveConfig,
     ConfigChanged(Config),
     CosmicCompConfigChanged(cosmic_xkb::CosmicCompConfig),
@@ -169,6 +170,7 @@ impl cosmic::Application for KiwiApp {
             config.show_keyboard,
             config.show_mouse,
             config.show_gestures,
+            config.show_touch,
         )));
 
         let initial_xkb_config = cosmic_xkb::load_current_config();
@@ -291,13 +293,14 @@ impl cosmic::Application for KiwiApp {
             self.config.show_keyboard,
             self.config.show_mouse,
             self.config.show_gestures,
+            self.config.show_touch,
         )
     }
 
     fn view_window(&self, id: window::Id) -> Element<'_, Self::Message> {
         // Check if this is an overlay (layer surface)
         if self.outputs.iter().any(|o| o.surface_id == id) {
-            view_overlay(&self.shared_state)
+            view_overlay(&self.shared_state, self.is_touch_surface(id))
         } else {
             // Settings window
             settings::settings_view(
@@ -312,6 +315,7 @@ impl cosmic::Application for KiwiApp {
                 self.config.show_keyboard,
                 self.config.show_mouse,
                 self.config.show_gestures,
+                self.config.show_touch,
             )
         }
     }
@@ -357,6 +361,17 @@ impl cosmic::Application for KiwiApp {
             // Periodic tick to update overlay and clean up expired keystrokes
             time::every(Duration::from_millis(50)).map(|_| Message::Tick),
         ];
+
+        // Touch markers track the finger, so they need a smoother refresh than the
+        // 50ms keystroke tick - only while contacts are actually on screen.
+        if self
+            .shared_state
+            .lock()
+            .map(|s| s.has_touches())
+            .unwrap_or(false)
+        {
+            subs.push(time::every(Duration::from_millis(16)).map(|_| Message::Tick));
+        }
 
         // Debounce timer for config save
         if self.pending_save {
@@ -420,6 +435,7 @@ impl cosmic::Application for KiwiApp {
                         state.current_mouse = None;
                         state.key_pressed_with_modifiers = false;
                         state.history.clear();
+                        state.touches.clear();
                     }
                 }
 
@@ -527,6 +543,17 @@ impl cosmic::Application for KiwiApp {
                     state.show_gestures = show;
                 }
             }
+            Message::SetShowTouch(show) => {
+                self.config.show_touch = show;
+                self.save_config();
+
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.show_touch = show;
+                    if !show {
+                        state.touches.clear();
+                    }
+                }
+            }
             Message::SaveConfig => {
                 if self.pending_save {
                     self.pending_save = false;
@@ -594,6 +621,12 @@ impl cosmic::Application for KiwiApp {
     }
 }
 
+/// Connector names used by built-in panels (eDP-1, LVDS-1, DSI-1, ...)
+fn is_internal_output(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    ["edp", "lvds", "dsi"].iter().any(|p| name.starts_with(p))
+}
+
 fn tray_subscription(rx: CbReceiver<tray::TrayAction>) -> Subscription<Message> {
     use cosmic::iced::Subscription;
 
@@ -647,6 +680,19 @@ impl KiwiApp {
                 tray.set_active(is_active);
             });
         }
+    }
+
+    /// Whether `id` is the surface that should draw touchscreen contacts.
+    ///
+    /// libinput doesn't say which output a touch device is mapped to (that
+    /// mapping lives in the compositor), so contacts go to the internal panel
+    /// when there is one, and otherwise to the first output kiwi saw.
+    fn is_touch_surface(&self, id: window::Id) -> bool {
+        self.outputs
+            .iter()
+            .find(|o| o.name.as_deref().is_some_and(is_internal_output))
+            .or_else(|| self.outputs.first())
+            .is_some_and(|o| o.surface_id == id)
     }
 
     fn handle_output_event(

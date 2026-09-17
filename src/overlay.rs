@@ -11,12 +11,42 @@ use cosmic::surface::action::{app_layer_shell, LiveSettings};
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use wayland_client::protocol::wl_output::WlOutput;
 
-use crate::config::{IconStyle, OverlayPosition, PaletteType};
+use crate::config::{IconStyle, OverlayPosition, Palette, PaletteType};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke};
 use crate::{KiwiApp, Message};
 
 /// Maximum number of keystrokes in history
 pub const MAX_HISTORY: usize = 10;
+
+/// How long a lifted touch point keeps fading out (seconds)
+const TOUCH_FADE_DURATION: f32 = 0.25;
+
+/// A single touchscreen contact, positioned in normalized 0.0..1.0 coordinates
+/// so the overlay can scale it to the surface it is drawn on.
+#[derive(Debug, Clone)]
+pub struct TouchPoint {
+    /// libinput seat slot - identifies the finger while it stays down
+    pub slot: u32,
+    pub x: f32,
+    pub y: f32,
+    /// Set when the finger was lifted; the marker fades out from then on
+    pub released: Option<std::time::Instant>,
+}
+
+impl TouchPoint {
+    /// 0.0 while the finger is down, growing to 1.0 over the fade-out
+    fn fade_progress(&self) -> f32 {
+        match self.released {
+            None => 0.0,
+            Some(at) => (at.elapsed().as_secs_f32() / TOUCH_FADE_DURATION).min(1.0),
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        self.released
+            .is_some_and(|at| at.elapsed().as_secs_f32() >= TOUCH_FADE_DURATION)
+    }
+}
 
 /// Shared state for keystroke visualization
 #[derive(Debug)]
@@ -42,6 +72,10 @@ pub struct SharedState {
     pub show_mouse: bool,
     /// Show touchpad gestures
     pub show_gestures: bool,
+    /// Show touchscreen contacts
+    pub show_touch: bool,
+    /// Live touchscreen contacts (plus the ones currently fading out)
+    pub touches: Vec<TouchPoint>,
     /// Current modifier state (live)
     pub modifiers: KeyModifiers,
     /// Peak modifiers held during current modifier session (for showing full combo on release)
@@ -70,6 +104,7 @@ impl SharedState {
         show_keyboard: bool,
         show_mouse: bool,
         show_gestures: bool,
+        show_touch: bool,
     ) -> Self {
         Self {
             enabled,
@@ -83,6 +118,8 @@ impl SharedState {
             show_keyboard,
             show_mouse,
             show_gestures,
+            show_touch,
+            touches: Vec::new(),
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
             current_key: None,
@@ -105,12 +142,53 @@ impl SharedState {
         self.show_keyboard = config.show_keyboard;
         self.show_mouse = config.show_mouse;
         self.show_gestures = config.show_gestures;
+        self.show_touch = config.show_touch;
     }
 
     /// Clean up expired keystrokes
     pub fn cleanup_expired(&mut self) {
         let fade_duration = self.fade_duration;
         self.history.retain(|k| !k.is_expired(fade_duration));
+        self.touches.retain(|t| !t.is_expired());
+    }
+
+    /// True while something touch-related still needs to be animated
+    pub fn has_touches(&self) -> bool {
+        !self.touches.is_empty()
+    }
+
+    /// Record a new contact (or restart one that reuses a slot still fading out)
+    pub fn touch_down(&mut self, slot: u32, x: f32, y: f32) {
+        self.touches.retain(|t| t.slot != slot);
+        self.touches.push(TouchPoint {
+            slot,
+            x,
+            y,
+            released: None,
+        });
+    }
+
+    /// Move a live contact. Ignores slots that are already fading out.
+    pub fn touch_motion(&mut self, slot: u32, x: f32, y: f32) {
+        if let Some(touch) = self
+            .touches
+            .iter_mut()
+            .find(|t| t.slot == slot && t.released.is_none())
+        {
+            touch.x = x;
+            touch.y = y;
+        }
+    }
+
+    /// Start the fade-out for a lifted contact
+    pub fn touch_up(&mut self, slot: u32) {
+        if let Some(touch) = self
+            .touches
+            .iter_mut()
+            .find(|t| t.slot == slot && t.released.is_none())
+        {
+            touch.released = Some(std::time::Instant::now());
+        }
     }
 }
 
@@ -128,6 +206,8 @@ impl Default for SharedState {
             show_keyboard: true,
             show_mouse: true,
             show_gestures: true,
+            show_touch: true,
+            touches: Vec::new(),
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
             current_key: None,
@@ -208,8 +288,8 @@ pub fn create_layer_surface_for_output(
             ..Default::default()
         },
         move |_app| layer_surface_settings(&output, id),
-        Some(Box::new(|app: &KiwiApp| {
-            view_overlay(&app.shared_state).map(cosmic::Action::App)
+        Some(Box::new(move |app: &KiwiApp| {
+            view_overlay(&app.shared_state, app.is_touch_surface(id)).map(cosmic::Action::App)
         })),
     );
 
@@ -221,9 +301,84 @@ pub fn destroy_surface(surface_id: window::Id) -> cosmic::iced::Task<cosmic::Act
     destroy_layer_surface(surface_id)
 }
 
-/// Render the overlay view (full-screen, with layout positioning)
-pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static, Message> {
-    let (keystrokes, key_size, fade_duration, palette, position, history_count, icon_style) = state
+/// Paints a marker at every touchscreen contact.
+///
+/// Touch points are stored normalized, so they are scaled to the canvas bounds
+/// here - the canvas fills the whole layer surface, which covers the output.
+#[derive(Debug)]
+struct TouchCanvas {
+    touches: Vec<TouchPoint>,
+    palette: PaletteType,
+    /// Marker size follows the same size slider as the keystroke widgets
+    key_size: f32,
+}
+
+impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for TouchCanvas {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &cosmic::Renderer,
+        _theme: &cosmic::Theme,
+        bounds: cosmic::iced::Rectangle,
+        _cursor: cosmic::iced::mouse::Cursor,
+    ) -> Vec<cosmic::widget::canvas::Geometry> {
+        use cosmic::widget::canvas::{Frame, Path, Stroke};
+
+        let mut frame = Frame::new(renderer, bounds.size());
+        let palette = Palette::from_type(self.palette);
+
+        for touch in &self.touches {
+            // Lifted fingers fade out while their ring expands slightly
+            let progress = touch.fade_progress();
+            let opacity = 1.0 - progress;
+            let center = cosmic::iced::Point::new(touch.x * bounds.width, touch.y * bounds.height);
+            let ring_radius = self.key_size * 0.5 * (1.0 + progress * 0.3);
+            let dot_radius = self.key_size * 0.28;
+
+            frame.fill(
+                &Path::circle(center, dot_radius),
+                with_opacity(palette.bg_pressed, opacity),
+            );
+            frame.stroke(
+                &Path::circle(center, ring_radius),
+                Stroke::default()
+                    .with_color(with_opacity(palette.text, 0.85 * opacity))
+                    .with_width(3.0),
+            );
+        }
+
+        vec![frame.into_geometry()]
+    }
+}
+
+/// Scale a color's alpha channel
+fn with_opacity(color: cosmic::iced::Color, opacity: f32) -> cosmic::iced::Color {
+    cosmic::iced::Color {
+        a: color.a * opacity,
+        ..color
+    }
+}
+
+/// Render the overlay view (full-screen, with layout positioning).
+///
+/// `show_touches` is only set for the surface on the output touch input is
+/// attributed to, so contacts are drawn once rather than on every display.
+pub fn view_overlay(
+    state: &Arc<Mutex<SharedState>>,
+    show_touches: bool,
+) -> cosmic::Element<'static, Message> {
+    let (
+        keystrokes,
+        key_size,
+        fade_duration,
+        palette,
+        position,
+        history_count,
+        icon_style,
+        touches,
+    ) = state
         .lock()
         .map(|s| {
             if !s.enabled {
@@ -235,6 +390,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
                     s.position,
                     s.history_count,
                     s.icon_style,
+                    Vec::new(),
                 );
             }
 
@@ -273,6 +429,12 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
                 }
             }
 
+            let touches = if s.show_touch && show_touches {
+                s.touches.clone()
+            } else {
+                Vec::new()
+            };
+
             (
                 display,
                 s.key_size,
@@ -281,6 +443,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
                 s.position,
                 s.history_count,
                 s.icon_style,
+                touches,
             )
         })
         .unwrap_or((
@@ -291,6 +454,7 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
             OverlayPosition::default(),
             5,
             IconStyle::default(),
+            Vec::new(),
         ));
 
     // Determine vertical and horizontal alignment based on position
@@ -354,11 +518,27 @@ pub fn view_overlay(state: &Arc<Mutex<SharedState>>) -> cosmic::Element<'static,
         };
 
     // Full-screen container with proper alignment
-    cosmic::widget::container(positioned_content)
-        .width(cosmic::iced::Length::Fill)
-        .height(cosmic::iced::Length::Fill)
-        .align_x(h_align)
-        .align_y(v_align)
-        .padding(20) // Margin from edges
-        .into()
+    let keystroke_layer: cosmic::Element<'static, Message> =
+        cosmic::widget::container(positioned_content)
+            .width(cosmic::iced::Length::Fill)
+            .height(cosmic::iced::Length::Fill)
+            .align_x(h_align)
+            .align_y(v_align)
+            .padding(20) // Margin from edges
+            .into();
+
+    if touches.is_empty() {
+        return keystroke_layer;
+    }
+
+    // Touch markers go behind the keystroke row, covering the whole surface
+    let touch_layer = cosmic::widget::Canvas::new(TouchCanvas {
+        touches,
+        palette,
+        key_size,
+    })
+    .width(cosmic::iced::Length::Fill)
+    .height(cosmic::iced::Length::Fill);
+
+    cosmic::iced::widget::stack![touch_layer, keystroke_layer].into()
 }
