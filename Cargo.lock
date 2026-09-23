@@ -2823,7 +2823,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kiwi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cosmic-client-toolkit 0.2.0 (git+https://github.com/pop-os/cosmic-protocols?branch=main)",
  "cosmic-config",
