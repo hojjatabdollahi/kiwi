@@ -229,32 +229,9 @@ impl Keystroke {
         self.timestamp.elapsed().as_secs_f32()
     }
 
-    /// Check if this keystroke has expired (older than fade duration)
-    pub fn is_expired(&self, fade_duration_secs: f32) -> bool {
-        self.age_secs() >= fade_duration_secs
-    }
-
-    /// Get opacity based on age (1.0 = new, 0.0 = fully faded)
-    /// Stays at 1.0 for the first 70% of duration, then fades in the last 30% with easing
-    pub fn opacity(&self, fade_duration_secs: f32) -> f32 {
-        if self.pressed {
-            1.0 // Pressed keys are always fully visible
-        } else {
-            let age = self.age_secs();
-            let fade_start = fade_duration_secs * 0.7; // Start fading at 70%
-
-            if age >= fade_duration_secs {
-                0.0
-            } else if age <= fade_start {
-                1.0 // Full opacity for first 70%
-            } else {
-                // Fade from 1.0 to 0.0 in the last 30% with ease-out
-                let fade_phase = fade_duration_secs - fade_start;
-                let t = (age - fade_start) / fade_phase; // 0.0 -> 1.0
-                let eased = ease_in_cubic(t);
-                1.0 - eased
-            }
-        }
+    /// Check if this keystroke has expired (older than its lifetime)
+    pub fn is_expired(&self, life: Lifetime) -> bool {
+        self.age_secs() >= life.total()
     }
 }
 
@@ -881,7 +858,7 @@ fn fill_background(fill: Fill, opacity: f32) -> Background {
 pub fn keystrokes_row<'a, M: 'a + Clone>(
     keystrokes: &[Keystroke],
     key_size: f32,
-    fade_duration: f32,
+    life: Lifetime,
     theme: &Theme,
     line_width: f32,
     position: OverlayPosition,
@@ -890,23 +867,13 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     motion: Motion,
 ) -> Element<'a, M> {
     if theme.layout == Layout::Text {
-        return typewriter_line(
-            keystrokes,
-            key_size,
-            fade_duration,
-            theme,
-            line_width,
-            icon_style,
-        );
+        return typewriter_line(keystrokes, key_size, life, theme, line_width, icon_style);
     }
 
     // Keys run inward from the screen edge, newest at the edge. A held key sits
     // there while it builds up and stays in the same place once it's let go.
     // Keys only ever move away from the edge, or go away.
-    let visible: Vec<&Keystroke> = keystrokes
-        .iter()
-        .filter(|k| !k.is_expired(fade_duration))
-        .collect();
+    let visible: Vec<&Keystroke> = keystrokes.iter().filter(|k| !k.is_expired(life)).collect();
     // The row shows this much, measured in single keys; older keys slide out past
     // its far edge, fading as they cross it
     let window = history_count as f32 * (key_size + theme.key.gap);
@@ -931,7 +898,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         Some(RailVisibility::Always) => 1.0,
         _ => visible
             .iter()
-            .map(|k| key_opacity(theme, k, fade_duration))
+            .map(|k| key_opacity(theme, k, life))
             .fold(0.0, f32::max),
     };
 
@@ -976,14 +943,14 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         } else {
             (1.0, 1.0, 0.0)
         };
-        let width = width.min(leaving(theme, k, fade_duration));
+        let width = width.min(leaving(theme, k, life));
         if width <= 0.0 {
             continue;
         }
         let room = (key_width(k, key_size, theme) + gap) * width;
         // Fade out as the key crosses the far edge of the window
         let inside = ((window - distance) / room).clamp(0.0, 1.0);
-        let opacity = key_opacity(theme, k, fade_duration) * dim * inside;
+        let opacity = key_opacity(theme, k, life) * dim * inside;
 
         let merging = if i == 0 {
             merge_progress(motion.merged_at)
@@ -1157,6 +1124,26 @@ fn key_width(keystroke: &Keystroke, key_size: f32, theme: &Theme) -> f32 {
     parts_width(&keystroke.keys, key_size, theme) + repeat
 }
 
+/// How long keystrokes stay on screen: fully visible while they linger, then
+/// disappearing the way the theme says
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Lifetime {
+    pub linger: f32,
+    pub disappear: f32,
+}
+
+impl Lifetime {
+    /// Long enough that nothing ever disappears, for samples
+    pub const FOREVER: Self = Self {
+        linger: 3600.0,
+        disappear: 0.0,
+    };
+
+    pub fn total(self) -> f32 {
+        self.linger + self.disappear
+    }
+}
+
 /// How long a new keystroke takes to arrive at the edge
 pub const SLIDE_SECS: f32 = 0.3;
 
@@ -1181,19 +1168,20 @@ fn slide_phases(shifted_at: Option<Instant>, rushed: bool) -> (f32, f32) {
     )
 }
 
-/// The share of the visible time a wiping key spends wiping off
-const WIPE_SHARE: f32 = 0.3;
-
 /// A key's opacity as it ages: fading out, or fully visible until it's gone.
 /// A fading key finishes fading before it closes up, so the closing only moves
 /// empty space and never looks like a wipe.
-fn key_opacity(theme: &Theme, keystroke: &Keystroke, fade_duration: f32) -> f32 {
+fn key_opacity(theme: &Theme, keystroke: &Keystroke, life: Lifetime) -> f32 {
+    if keystroke.pressed {
+        return 1.0;
+    }
     match theme.key.expire {
         Expiry::Fade => {
-            let closing = expiring_secs(theme, keystroke, fade_duration);
-            keystroke.opacity(fade_duration - closing)
+            let fading = life.disappear - expiring_secs(theme, keystroke, life);
+            let t = (keystroke.age_secs() - life.linger) / fading.max(f32::EPSILON);
+            1.0 - ease_in_cubic(t.clamp(0.0, 1.0))
         }
-        Expiry::Wipe | Expiry::Vanish if keystroke.is_expired(fade_duration) => 0.0,
+        Expiry::Wipe | Expiry::Vanish if keystroke.is_expired(life) => 0.0,
         Expiry::Wipe | Expiry::Vanish => 1.0,
     }
 }
@@ -1202,23 +1190,23 @@ fn key_opacity(theme: &Theme, keystroke: &Keystroke, fade_duration: f32) -> f32 
 /// taking longer the more keys they have so every key closes at the same speed.
 /// Wiping keys shrink from the far side over the end of their time. Vanishing
 /// keys keep their width until they're gone.
-fn leaving(theme: &Theme, keystroke: &Keystroke, fade_duration: f32) -> f32 {
+fn leaving(theme: &Theme, keystroke: &Keystroke, life: Lifetime) -> f32 {
     if keystroke.pressed {
         return 1.0;
     }
-    let secs = expiring_secs(theme, keystroke, fade_duration);
+    let secs = expiring_secs(theme, keystroke, life);
     if secs <= 0.0 {
         return 1.0;
     }
-    ((fade_duration - keystroke.age_secs()) / secs).clamp(0.0, 1.0)
+    ((life.total() - keystroke.age_secs()) / secs).clamp(0.0, 1.0)
 }
 
 /// How long before it expires a keystroke starts to shrink away (0 for none)
-pub fn expiring_secs(theme: &Theme, keystroke: &Keystroke, fade_duration: f32) -> f32 {
+pub fn expiring_secs(theme: &Theme, keystroke: &Keystroke, life: Lifetime) -> f32 {
     match theme.key.expire {
         // Closing up takes longer for wider keys, but always leaves time to fade
-        Expiry::Fade => (SLIDE_SECS * keystroke.keys.len().max(1) as f32).min(fade_duration * 0.4),
-        Expiry::Wipe => fade_duration * WIPE_SHARE,
+        Expiry::Fade => (SLIDE_SECS * keystroke.keys.len().max(1) as f32).min(life.disappear * 0.4),
+        Expiry::Wipe => life.disappear,
         Expiry::Vanish => 0.0,
     }
 }
@@ -1385,7 +1373,7 @@ fn line_pieces<'k>(keystrokes: impl IntoIterator<Item = &'k Keystroke>) -> Vec<L
 fn typewriter_line<'a, M: 'a>(
     keystrokes: &[Keystroke],
     key_size: f32,
-    fade_duration: f32,
+    life: Lifetime,
     theme: &Theme,
     width: f32,
     icon_style: IconStyle,
@@ -1400,7 +1388,7 @@ fn typewriter_line<'a, M: 'a>(
     let char_width = font_size * 0.5;
     let space_width = font_size * 0.3;
 
-    let pieces = line_pieces(keystrokes.iter().filter(|k| !k.is_expired(fade_duration)));
+    let pieces = line_pieces(keystrokes.iter().filter(|k| !k.is_expired(life)));
     let text_color = theme.key.text.0;
     let mut children: Vec<Element<'a, M>> = Vec::new();
     let visibility = theme.rail.map(|rail| rail.visibility);
@@ -1447,11 +1435,11 @@ fn typewriter_line<'a, M: 'a>(
             }
         };
         // Wiping pieces shrink from the far side as they expire
-        let shown = leaving(theme, keystroke, fade_duration);
+        let shown = leaving(theme, keystroke, life);
         let piece_width = piece_width * shown;
         // 1.0 until the piece reaches the fade zone, down to 0.0 at the line's far end
         let edge = ((width - x - piece_width) / (width - fade_from)).clamp(0.0, 1.0);
-        let age = key_opacity(theme, keystroke, fade_duration);
+        let age = key_opacity(theme, keystroke, life);
         rail_opacity = rail_opacity.max(age);
         let opacity = age * edge;
         x += piece_width;
@@ -1553,7 +1541,10 @@ mod tests {
     #[test]
     fn keys_expire_the_way_the_theme_says() {
         use crate::config::BuiltinTheme;
-        let fade = 5.0;
+        let fade = Lifetime {
+            linger: 3.5,
+            disappear: 1.5,
+        };
         let aged = |secs: f32| Keystroke {
             timestamp: Instant::now() - std::time::Duration::from_secs_f32(secs),
             ..Keystroke::single("a", false)

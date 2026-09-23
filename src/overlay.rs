@@ -12,7 +12,7 @@ use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivit
 use wayland_client::protocol::wl_output::WlOutput;
 
 use crate::config::{IconStyle, OverlayPosition};
-use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke};
+use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke, Lifetime};
 use crate::theme::{Layout, Theme, ThemeChoice};
 use crate::{KiwiApp, Message};
 
@@ -55,8 +55,8 @@ pub struct SharedState {
     pub enabled: bool,
     /// Size of keystroke widgets
     pub key_size: f32,
-    /// How long keystrokes stay visible (seconds)
-    pub fade_duration: f32,
+    /// How long keystrokes stay on screen
+    pub life: Lifetime,
     /// Which theme is in use, to notice when the config switches it
     pub theme_choice: ThemeChoice,
     /// The loaded theme (shared with every view that draws keys)
@@ -124,7 +124,10 @@ impl SharedState {
     pub fn update_from_config(&mut self, config: &crate::config::Config) {
         self.enabled = config.enabled;
         self.key_size = config.key_size;
-        self.fade_duration = config.fade_duration;
+        self.life = Lifetime {
+            linger: config.fade_duration,
+            disappear: config.disappear_duration,
+        };
         let theme_choice = ThemeChoice::from_config(config);
         if theme_choice != self.theme_choice {
             self.theme = Arc::new(theme_choice.load(&crate::theme::themes_dir()));
@@ -148,17 +151,25 @@ impl SharedState {
         self.show_tablet = config.show_tablet;
     }
 
+    /// How long keystrokes stay on screen with the current theme. Keys that
+    /// vanish have no disappearing to take time for.
+    pub fn life(&self) -> Lifetime {
+        match self.theme.key.expire {
+            crate::theme::Expiry::Vanish => Lifetime {
+                disappear: 0.0,
+                ..self.life
+            },
+            _ => self.life,
+        }
+    }
+
     /// Clean up expired keystrokes
     pub fn cleanup_expired(&mut self) {
-        let fade_duration = self.fade_duration;
-        if self
-            .preview
-            .as_ref()
-            .is_some_and(|p| p.is_over(fade_duration))
-        {
+        let life = self.life();
+        if self.preview.as_ref().is_some_and(|p| p.is_over(life)) {
             self.preview = None;
         }
-        self.history.retain(|k| !k.is_expired(fade_duration));
+        self.history.retain(|k| !k.is_expired(life));
         self.touches.retain(|t| !t.is_expired());
     }
 
@@ -172,8 +183,8 @@ impl SharedState {
     pub fn is_sliding(&self) -> bool {
         use crate::keystroke::{expiring_secs, MERGE_SECS, SLIDE_SECS, SLOT_GROW_SECS};
         let expiring = |k: &Keystroke| {
-            let left = self.fade_duration - k.age_secs();
-            let secs = expiring_secs(&self.theme, k, self.fade_duration);
+            let left = self.life().total() - k.age_secs();
+            let secs = expiring_secs(&self.theme, k, self.life());
             !k.pressed && (0.0..secs).contains(&left)
         };
         self.shifted_at
@@ -228,7 +239,10 @@ impl Default for SharedState {
         Self {
             enabled: true,
             key_size: 64.0,
-            fade_duration: 5.0,
+            life: Lifetime {
+                linger: 4.0,
+                disappear: 1.0,
+            },
             theme_choice: ThemeChoice::Builtin(crate::config::BuiltinTheme::Frosted),
             theme: Arc::new(Theme::default()),
             position: OverlayPosition::TopRight,
@@ -410,7 +424,7 @@ fn with_opacity(color: cosmic::iced::Color, opacity: f32) -> cosmic::iced::Color
 struct Snapshot {
     keystrokes: Vec<Keystroke>,
     key_size: f32,
-    fade_duration: f32,
+    life: Lifetime,
     theme: Arc<Theme>,
     position: OverlayPosition,
     anchor: (f32, f32),
@@ -445,11 +459,8 @@ impl Snapshot {
         // pressed while the last is still held), or a finished keystroke that
         // arrived without being held first (a scroll, a gesture). Releasing a held
         // key doesn't: it stays right where it was, now finished.
-        let fade_duration = s.fade_duration;
-        let visible = keystrokes
-            .iter()
-            .filter(|k| !k.is_expired(fade_duration))
-            .count();
+        let life = s.life();
+        let visible = keystrokes.iter().filter(|k| !k.is_expired(life)).count();
         let row_len = visible - usize::from(held && visible > 0);
         let held_parts = if held {
             keystrokes.last().map_or(0, |k| k.keys.len())
@@ -475,7 +486,7 @@ impl Snapshot {
         // adding one; its copy glides onto it
         let newest = keystrokes
             .iter()
-            .rfind(|k| !k.is_expired(fade_duration))
+            .rfind(|k| !k.is_expired(life))
             .map(|k| (k.keys.clone(), k.count));
         match (&newest, &s.newest) {
             (Some((keys, count)), Some((was_keys, was_count)))
@@ -499,7 +510,7 @@ impl Snapshot {
         Self {
             keystrokes,
             key_size: s.key_size,
-            fade_duration: s.fade_duration,
+            life,
             theme,
             position: s.position,
             anchor: s.anchor,
@@ -614,9 +625,9 @@ impl Preview {
     }
 
     /// Done once the last keystroke has faded out
-    fn is_over(&self, fade_duration: f32) -> bool {
+    fn is_over(&self, life: Lifetime) -> bool {
         let last = PREVIEW_SCRIPT.last().map_or(0, |(at, ..)| *at);
-        self.started.elapsed().as_secs_f32() > last as f32 / 1000.0 + fade_duration
+        self.started.elapsed().as_secs_f32() > last as f32 / 1000.0 + life.total()
     }
 }
 
@@ -713,7 +724,7 @@ pub fn view_overlay(
         keystrokes_row(
             &frame.keystrokes,
             frame.key_size,
-            frame.fade_duration,
+            frame.life,
             &frame.theme,
             frame.line_width.unwrap_or(frame.theme.line_width),
             frame.position,

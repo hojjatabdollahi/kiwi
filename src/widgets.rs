@@ -310,9 +310,22 @@ impl<M> cosmic::widget::Widget<M, cosmic::Theme, cosmic::Renderer> for Reveal<'_
                 );
             });
         };
-        // Only clip while part of the content is hidden
-        if layout.bounds().width < content.bounds().width - 0.5 {
-            renderer.with_layer(layout.bounds(), draw);
+        // Only clip while part of the content is hidden, and only on the side it's
+        // hidden, so whatever hangs over the other edges (a repeat badge) still shows
+        let bounds = layout.bounds();
+        if bounds.width < content.bounds().width - 0.5 {
+            let (left, right) = if self.keep_right {
+                (bounds.x, viewport.x + viewport.width)
+            } else {
+                (viewport.x, bounds.x + bounds.width)
+            };
+            let hidden_side = Rectangle {
+                x: left,
+                y: viewport.y,
+                width: right - left,
+                height: viewport.height,
+            };
+            renderer.with_layer(hidden_side, draw);
         } else {
             draw(renderer);
         }

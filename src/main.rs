@@ -130,6 +130,7 @@ pub enum Message {
     // Settings
     ToggleActive(bool),
     SetFadeDuration(f32),
+    SetDisappearDuration(f32),
     SelectTheme(ThemeChoice),
     PreviewTheme(ThemeChoice),
     OpenThemesFolder,
@@ -522,7 +523,14 @@ impl cosmic::Application for KiwiApp {
 
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
-                    state.fade_duration = duration;
+                    state.life.linger = duration;
+                }
+            }
+            Message::SetDisappearDuration(duration) => {
+                self.config.disappear_duration = duration;
+                self.pending_save = true;
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.life.disappear = duration;
                 }
             }
             Message::SelectTheme(choice) => self.select_theme(choice),

@@ -1120,7 +1120,7 @@ fn preview<'a>(
     let sample = keystrokes_row::<Message>(
         &keys,
         34.0,
-        60.0, // long enough that the sample never fades
+        crate::keystroke::Lifetime::FOREVER,
         theme,
         260.0,
         // Right-aligned so the order reads left to right, like typing

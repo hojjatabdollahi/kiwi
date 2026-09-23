@@ -164,8 +164,10 @@ pub struct Config {
     pub enabled: bool,
     /// Size of keystroke widgets (32-256 pixels)
     pub key_size: f32,
-    /// How long keystrokes stay visible (in seconds)
+    /// How long keystrokes stay fully visible before disappearing (in seconds)
     pub fade_duration: f32,
+    /// How long keystrokes take to disappear (in seconds)
+    pub disappear_duration: f32,
     /// Built-in theme, used when `user_theme` is not set
     pub palette: BuiltinTheme,
     /// Folder name of the user theme in use (see `theme::themes_dir`)
@@ -231,7 +233,8 @@ impl Default for Config {
         Self {
             enabled: true,
             key_size: 64.0,
-            fade_duration: 5.0,
+            fade_duration: 4.0,
+            disappear_duration: 1.0,
             palette: BuiltinTheme::Frosted,
             user_theme: None,
             position: OverlayPosition::TopRight,

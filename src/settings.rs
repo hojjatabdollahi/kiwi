@@ -148,21 +148,24 @@ pub fn settings_view(app: &KiwiApp) -> Element<'_, Message> {
 
     let behavior = settings::section()
         .title("Behavior")
-        .add(settings::item(
-            "Stay visible for",
-            widget::Row::new()
-                .spacing(12)
-                .align_y(Alignment::Center)
-                .push(
-                    widget::slider(1.0..=10.0, config.fade_duration, Message::SetFadeDuration)
-                        .width(Length::Fixed(150.0)),
-                )
-                .push(
-                    widget::text::body(format!("{:.1} s", config.fade_duration))
-                        .width(Length::Fixed(44.0))
-                        .align_x(cosmic::iced::alignment::Horizontal::Right),
-                ),
-        ))
+        .add(
+            settings::item::builder("Linger")
+                .description("How long keys stay fully visible")
+                .control(seconds_slider(
+                    1.0..=10.0,
+                    config.fade_duration,
+                    Message::SetFadeDuration,
+                )),
+        )
+        .add(
+            settings::item::builder("Disappear")
+                .description("How long keys take to fade or wipe away")
+                .control(seconds_slider(
+                    0.0..=3.0,
+                    config.disappear_duration,
+                    Message::SetDisappearDuration,
+                )),
+        )
         .add(settings::item(
             "Shift+2 shows",
             widget::segmented_control::horizontal(&app.display_mode_model)
@@ -400,7 +403,7 @@ fn theme_card(
     let sample = keystrokes_row::<Message>(
         &keys,
         26.0,
-        60.0, // long enough that the sample never fades
+        crate::keystroke::Lifetime::FOREVER,
         theme,
         110.0, // a typewriter line short enough to fit the card
         OverlayPosition::TopRight,
@@ -494,4 +497,26 @@ fn import_card() -> Element<'static, Message> {
         crate::widgets::dashed_outline(radius),
     ]
     .into()
+}
+
+/// A slider for a duration, with its value in seconds next to it
+fn seconds_slider<'a>(
+    range: std::ops::RangeInclusive<f32>,
+    value: f32,
+    on_change: fn(f32) -> Message,
+) -> Element<'a, Message> {
+    widget::Row::new()
+        .spacing(12)
+        .align_y(Alignment::Center)
+        .push(
+            widget::slider(range, value, on_change)
+                .step(0.1_f32)
+                .width(Length::Fixed(150.0)),
+        )
+        .push(
+            widget::text::body(format!("{value:.1} s"))
+                .width(Length::Fixed(44.0))
+                .align_x(cosmic::iced::alignment::Horizontal::Right),
+        )
+        .into()
 }
