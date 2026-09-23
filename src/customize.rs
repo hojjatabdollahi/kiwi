@@ -237,7 +237,7 @@ pub struct Draft {
     pub theme: Theme,
     /// Whether anything changed since it was opened, saved or discarded
     pub edited: bool,
-    /// Where the icons come from (copied into the theme folder on save)
+    /// The folder the theme's icons and caps were read from, if any
     pub icons_dir: Option<PathBuf>,
     /// The color being picked, if the picker is open
     picking: Option<Picking>,
@@ -564,10 +564,9 @@ impl KiwiApp {
                     draft.save_name = name.clone();
                 }
                 let text = draft.theme.to_ron();
-                let icons = draft.icons_dir.clone();
                 let result = theme::save(
                     &text,
-                    icons.as_deref(),
+                    &draft.theme.files(),
                     &theme::themes_dir(),
                     &draft.save_name,
                 );
@@ -852,7 +851,13 @@ pub fn view<'a>(
         .icons_dir
         .as_deref()
         .map(short_path)
-        .unwrap_or_else(|| "No folder, using Kiwi's icons".to_string());
+        .unwrap_or_else(|| {
+            if theme.icons.is_empty() && theme.caps.is_empty() {
+                "No folder, using Kiwi's icons".to_string()
+            } else {
+                "Built into this theme".to_string()
+            }
+        });
     let mut icons = settings::section()
         .title("Icons")
         .add(settings::item_row(vec![
@@ -881,7 +886,12 @@ pub fn view<'a>(
                 ICON_KEYS.len() - missing.len(),
                 ICON_KEYS.len()
             ))
-            .description("The rest use Kiwi's built-in icons")
+            .description(match theme.caps.len() {
+                0 => "The rest use Kiwi's built-in icons".to_string(),
+                caps => {
+                    format!("The rest use Kiwi's built-in icons. Also {caps} keycaps from caps/")
+                }
+            })
             .control(
                 widget::button::link(if draft.show_missing_icons {
                     "Hide list"

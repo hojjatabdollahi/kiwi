@@ -280,16 +280,28 @@ fn plus_font_size_for_key(key_size: f32) -> f32 {
     key_size * 0.4
 }
 
-/// Returns (icon_data, should_apply_color) based on key and icon style preference
+/// Buttons and the label shown when they're moved while held
+const DRAGS: &[(&str, &str)] = &[
+    ("LClick", "LDrag"),
+    ("Tap", "TapDrag"),
+    ("PenTap", "PenDrag"),
+    ("Eraser", "EraserDrag"),
+];
+
 /// The label to show when a button was moved while held (e.g. "LClick" -> "LDrag")
 pub fn drag_variant(key: &str) -> Option<&'static str> {
-    match key {
-        "LClick" => Some("LDrag"),
-        "Tap" => Some("TapDrag"),
-        "PenTap" => Some("PenDrag"),
-        "Eraser" => Some("EraserDrag"),
-        _ => None,
-    }
+    DRAGS
+        .iter()
+        .find(|(button, _)| *button == key)
+        .map(|(_, drag)| *drag)
+}
+
+/// The button a drag label belongs to (e.g. "LDrag" -> "LClick")
+pub fn dragged_button(key: &str) -> Option<&'static str> {
+    DRAGS
+        .iter()
+        .find(|(_, drag)| *drag == key)
+        .map(|(button, _)| *button)
 }
 
 /// Every key Kiwi has a built-in icon for, which themes can replace
@@ -359,6 +371,7 @@ pub const ICON_KEYS: &[&str] = &[
     "Pad8",
 ];
 
+/// Returns (icon_data, should_apply_color) based on key and icon style preference
 fn get_icon_for_key_with_style(key: &str, icon_style: IconStyle) -> Option<(&'static [u8], bool)> {
     let use_text = matches!(icon_style, IconStyle::Text);
 
@@ -576,6 +589,101 @@ fn key_content_with_emblem<'a, M: 'a>(
     }
 }
 
+/// Height of a keycap in a `key_size` row; the room left below lets a held cap drop
+fn cap_height(key_size: f32) -> f32 {
+    key_size * 0.94
+}
+
+/// The cap `key` is drawn as, if the theme draws keycaps: its own, or the blank one
+fn cap_for<'t>(theme: &'t Theme, key: &str) -> Option<&'t theme::Cap> {
+    if theme.caps.is_empty() {
+        return None;
+    }
+    theme.cap(key).or(theme.blank_cap())
+}
+
+/// Width of one key: a cap is as wide as its shape, anything else is square
+fn part_width(theme: &Theme, key: &str, key_size: f32) -> f32 {
+    cap_for(theme, key).map_or(key_size, |cap| cap.aspect * cap_height(key_size))
+}
+
+/// A key drawn as a keycap: the theme's own cap for it, or the blank cap with the
+/// usual label on top. A held cap sits a little lower. A key with neither gets a
+/// box of its own, like the other themes draw.
+fn keycap<'a, M: 'a>(
+    key: &str,
+    key_size: f32,
+    opacity: f32,
+    text_color: Color,
+    pressed: bool,
+    icon_style: IconStyle,
+    theme: &Theme,
+) -> Element<'a, M> {
+    let own = theme.cap(key);
+    let Some(cap) = own.or(theme.blank_cap()) else {
+        let fill = if pressed {
+            Fill::Solid(theme.key.pressed)
+        } else {
+            theme.key.background
+        };
+        return with_border(
+            widget::container(key_content_with_emblem(
+                key, text_color, key_size, pressed, icon_style, theme,
+            ))
+            .width(Length::Fixed(key_size))
+            .height(Length::Fixed(key_size)),
+            fill_background(fill, opacity),
+            theme.key.border,
+            theme.key.radius,
+            opacity,
+        );
+    };
+
+    let height = cap_height(key_size);
+    let width = cap.aspect * height;
+    let mut layers: Vec<Element<'a, M>> = vec![Svg::new(cap.svg.clone())
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(height))
+        .opacity(opacity)
+        .into()];
+    if own.is_none() {
+        // Centered on the theme's label spot, not always the middle
+        let spot = theme.cap_label.clamp(0.0, 1.0);
+        let top = (2.0 * spot - 1.0).max(0.0) * height;
+        let bottom = (1.0 - 2.0 * spot).max(0.0) * height;
+        layers.push(
+            widget::container(key_content(key, text_color, key_size, icon_style, theme))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding([top, 0.0, bottom, 0.0])
+                .align_x(iced::alignment::Horizontal::Center)
+                .align_y(iced::alignment::Vertical::Center)
+                .into(),
+        );
+    }
+    if pressed {
+        layers.push(
+            widget::container(pressed_emblem::<M>(text_color, key_size * 0.22))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Right)
+                .align_y(iced::alignment::Vertical::Bottom)
+                .padding([0.0, width * 0.08, key_size * 0.08, 0.0])
+                .into(),
+        );
+    }
+
+    widget::container(cosmic::iced::widget::Stack::with_children(layers))
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(key_size))
+        .align_y(if pressed {
+            iced::alignment::Vertical::Bottom
+        } else {
+            iced::alignment::Vertical::Top
+        })
+        .into()
+}
+
 /// Wraps a widget with a badge area.
 /// Badge is above for bottom positions, below for top positions.
 /// Always reserves space for the badge to prevent layout shifts when count changes.
@@ -667,8 +775,11 @@ fn keystroke_widget<'a, M: 'a>(
 
     let text_color = fade(style.text.0);
     let plus_color = fade(style.separator.0);
+    // A keycap theme draws each key as its own cap, with no box around them
+    let caps = !theme.caps.is_empty();
 
-    // Each key is a key_size square; combinations put a "+" between them
+    // Each key is a key_size square (or a cap as wide as its shape); combinations
+    // put a "+" between them
     let mut parts: Vec<Element<'a, M>> = Vec::new();
     let released = |i: usize| i < 8 && keystroke.released_parts & (1 << i) != 0;
     for (i, key) in keystroke.keys.iter().enumerate() {
@@ -693,7 +804,20 @@ fn keystroke_widget<'a, M: 'a>(
             );
         }
         if released(i) {
-            parts.push(widget::Space::new().width(Length::Fixed(key_size)).into());
+            let width = part_width(theme, key, key_size);
+            parts.push(widget::Space::new().width(Length::Fixed(width)).into());
+            continue;
+        }
+        if caps {
+            parts.push(keycap(
+                key,
+                key_size,
+                opacity,
+                text_color,
+                keystroke.pressed,
+                icon_style,
+                theme,
+            ));
             continue;
         }
         // Centered content: text or icon, plus the emblem if pressed
@@ -728,18 +852,17 @@ fn keystroke_widget<'a, M: 'a>(
         );
     }
 
-    let key_widget = with_border(
-        widget::container(
-            widget::row::with_children(parts)
-                .spacing(0)
-                .align_y(iced::Alignment::Center),
-        )
-        .height(Length::Fixed(key_size)),
-        background,
-        style.border,
-        style.radius,
-        opacity,
-    );
+    let row = widget::container(
+        widget::row::with_children(parts)
+            .spacing(0)
+            .align_y(iced::Alignment::Center),
+    )
+    .height(Length::Fixed(key_size));
+    let key_widget = if caps {
+        row.into()
+    } else {
+        with_border(row, background, style.border, style.radius, opacity)
+    };
 
     match style.repeats {
         // Always reserve space for the badge to prevent relayout
@@ -851,7 +974,8 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         Some((at, from_parts)) if from_parts < newest.keys.len() => {
             let t = (at.elapsed().as_secs_f32() / SLOT_GROW_SECS).min(1.0);
             let eased = 1.0 - (1.0 - t).powi(3);
-            let from = parts_width(from_parts, key_size) / parts_width(newest.keys.len(), key_size);
+            let from = parts_width(&newest.keys[..from_parts], key_size, theme)
+                / parts_width(&newest.keys, key_size, theme);
             from + (1.0 - from) * eased
         }
         _ => 1.0,
@@ -986,10 +1110,16 @@ pub struct Motion {
 /// How long a held combination takes to widen when a key joins it
 pub const SLOT_GROW_SECS: f32 = 0.18;
 
-/// Width of a keystroke with `parts` keys ("Ctrl + ⇧ + C" has three)
-fn parts_width(parts: usize, key_size: f32) -> f32 {
-    let parts = parts.max(1) as f32;
-    parts * key_size + (parts - 1.0) * PLUS_WIDTH
+/// Width of these keys side by side with a "+" between them ("Ctrl + ⇧ + C")
+fn parts_width(keys: &[String], key_size: f32, theme: &Theme) -> f32 {
+    if keys.is_empty() {
+        return key_size;
+    }
+    let widths: f32 = keys
+        .iter()
+        .map(|key| part_width(theme, key, key_size))
+        .sum();
+    widths + (keys.len() - 1) as f32 * PLUS_WIDTH
 }
 
 /// A keystroke's width without its gap, estimated from its keys and repeat count
@@ -1001,7 +1131,7 @@ fn key_width(keystroke: &Keystroke, key_size: f32, theme: &Theme) -> f32 {
     } else {
         0.0
     };
-    parts_width(keystroke.keys.len(), key_size) + repeat
+    parts_width(&keystroke.keys, key_size, theme) + repeat
 }
 
 /// How long a new keystroke takes to arrive at the edge
@@ -1277,10 +1407,9 @@ fn typewriter_line<'a, M: 'a>(
             }
             LinePiece::Text(text, k) => (text.chars().count() as f32 * char_width, k),
             LinePiece::Key(k) => {
-                let parts = k.keys.len() as f32;
                 let repeat = if k.count > 1 { small_key * 0.45 } else { 0.0 };
                 (
-                    parts * small_key + (parts - 1.0) * PLUS_WIDTH + repeat + 2.0 * key_margin,
+                    parts_width(&k.keys, small_key, theme) + repeat + 2.0 * key_margin,
                     k,
                 )
             }
@@ -1441,6 +1570,28 @@ mod tests {
                 "{key}"
             );
         }
+    }
+
+    #[test]
+    fn caps_are_as_wide_as_their_shape() {
+        use crate::config::BuiltinTheme;
+        let keys = |names: &[&str]| names.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        let plain = Theme::builtin(BuiltinTheme::Dark);
+        assert_eq!(
+            parts_width(&keys(&["Ctrl", "⇧"]), 50.0, &plain),
+            100.0 + PLUS_WIDTH
+        );
+
+        let mechanical = Theme::builtin(BuiltinTheme::Mechanical);
+        let letter = parts_width(&keys(&["a"]), 50.0, &mechanical);
+        let shift = parts_width(&keys(&["⇧"]), 50.0, &mechanical);
+        assert!(shift > 2.0 * letter, "{shift} vs {letter}");
+        // A mouse button has no cap of its own, so it's on the blank cap
+        assert_eq!(parts_width(&keys(&["LClick"]), 50.0, &mechanical), letter);
+        assert_eq!(
+            parts_width(&keys(&["⇧", "a"]), 50.0, &mechanical),
+            shift + letter + PLUS_WIDTH
+        );
     }
 
     #[test]

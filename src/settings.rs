@@ -109,14 +109,28 @@ pub fn settings_view(app: &KiwiApp) -> Element<'_, Message> {
                 // What the previews are drawn on; translucent themes need a backdrop
                 .push(preview_background_toggle(config.preview_background)),
         )
-        .push(theme_grid)
-        .push(
-            widget::Row::new()
-                .push(widget::Space::new().width(Length::Fill))
-                .push(
-                    widget::button::link("Open themes folder").on_press(Message::OpenThemesFolder),
-                ),
+        .push(theme_grid);
+    // Where the selected theme's artwork comes from
+    let credits = app
+        .themes
+        .iter()
+        .find(|(choice, _)| *choice == current)
+        .map(|(_, theme)| theme.credits.as_slice())
+        .unwrap_or_default();
+    for credit in credits {
+        theme_section = theme_section.push(
+            widget::button::link(format!(
+                "{} by {} · {}",
+                credit.work, credit.author, credit.license
+            ))
+            .on_press(Message::LaunchUrl(credit.url.clone())),
         );
+    }
+    theme_section = theme_section.push(
+        widget::Row::new()
+            .push(widget::Space::new().width(Length::Fill))
+            .push(widget::button::link("Open themes folder").on_press(Message::OpenThemesFolder)),
+    );
     if let Some(message) = &app.theme_message {
         theme_section = theme_section.push(widget::text::caption(message.as_str()));
     }

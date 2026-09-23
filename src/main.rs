@@ -234,7 +234,15 @@ impl cosmic::Application for KiwiApp {
             .icon(widget::icon::from_svg_bytes(APP_ICON))
             .version(env!("CARGO_PKG_VERSION"))
             .author("Hojjat Abdollahi")
-            .links([("Repository", REPOSITORY)])
+            // The built-in themes' artwork, with its license
+            .links(
+                std::iter::once(("Repository".to_string(), REPOSITORY.to_string())).chain(
+                    config::BuiltinTheme::ALL
+                        .iter()
+                        .flat_map(|builtin| Theme::builtin(*builtin).credits)
+                        .map(|c| (format!("{} by {} · {}", c.work, c.author, c.license), c.url)),
+                ),
+            )
             .license("GPL-3.0");
 
         let app = Self {
@@ -584,18 +592,14 @@ impl cosmic::Application for KiwiApp {
                 let dir = theme::themes_dir();
                 // Unsaved edits are exported as they are
                 let source = match &self.draft {
-                    Some(draft) if draft.edited => {
-                        Ok((draft.theme.to_ron(), draft.icons_dir.clone()))
-                    }
+                    Some(draft) if draft.edited => Ok((draft.theme.to_ron(), draft.theme.clone())),
                     _ => {
                         let choice = ThemeChoice::from_config(&self.config);
-                        choice
-                            .file_text(&dir)
-                            .map(|text| (text, choice.icons_dir(&dir)))
+                        choice.file_text(&dir).map(|text| (text, choice.load(&dir)))
                     }
                 };
                 let result =
-                    source.and_then(|(text, icons)| theme::export(&text, icons.as_deref(), &path));
+                    source.and_then(|(text, theme)| theme::export(&text, &theme.files(), &path));
                 self.theme_message = Some(match result {
                     Ok(()) => format!("Exported to {}", path.display()),
                     Err(e) => format!("Can't export: {e}"),

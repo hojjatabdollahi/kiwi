@@ -20,6 +20,8 @@ pub enum BuiltinTheme {
     Ribbon,
     Tape,
     Typewriter,
+    Mechanical,
+    Mac,
 }
 
 /// What the theme previews in settings are drawn on
@@ -146,6 +148,8 @@ impl BuiltinTheme {
         BuiltinTheme::Ribbon,
         BuiltinTheme::Tape,
         BuiltinTheme::Typewriter,
+        BuiltinTheme::Mechanical,
+        BuiltinTheme::Mac,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -157,6 +161,8 @@ impl BuiltinTheme {
             BuiltinTheme::Ribbon => "Ribbon",
             BuiltinTheme::Tape => "Tape",
             BuiltinTheme::Typewriter => "Typewriter",
+            BuiltinTheme::Mechanical => "Mechanical",
+            BuiltinTheme::Mac => "Mac",
         }
     }
 }

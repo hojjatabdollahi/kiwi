@@ -8,7 +8,12 @@
 //! my-theme/
 //!   theme.ron
 //!   icons/Enter.svg, icons/LClick.svg, ...   (optional, see `icon_file_stem`)
+//!   icons/caps/_blank.svg, icons/caps/Shift.svg, ...   (optional keycaps, see `Theme::cap`)
 //! ```
+//!
+//! An icon is drawn inside the key's box. A cap *is* the key: it's drawn instead
+//! of the box, at the key's height and as wide as the SVG's shape, and never tinted.
+//! Keys without their own cap use `_blank.svg` with their usual label on top.
 
 use std::collections::HashMap;
 use std::fs;
@@ -271,7 +276,76 @@ pub struct Theme {
     /// Icons from the theme's `icons/` folder, by file name without `.svg`
     #[serde(skip)]
     pub icons: HashMap<String, svg::Handle>,
+    /// Keycaps from the theme's `icons/caps/` folder, by file name without `.svg`
+    #[serde(skip)]
+    pub caps: HashMap<String, Cap>,
+    /// How far down the blank cap its label sits, as a share of the cap's height
+    /// (0.5 is the middle; caps with a thick front edge want it higher)
+    pub cap_label: f32,
+    /// Where the theme's artwork comes from, shown in settings
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub credits: Vec<Credit>,
 }
+
+/// A keycap SVG and its shape
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cap {
+    pub svg: svg::Handle,
+    /// Width over height; a 1u key is about 1, Shift about 2.25
+    pub aspect: f32,
+}
+
+impl Cap {
+    fn new(bytes: impl Into<std::borrow::Cow<'static, [u8]>>) -> Self {
+        let bytes = bytes.into();
+        Self {
+            aspect: svg_aspect(&bytes),
+            svg: svg::Handle::from_memory(bytes),
+        }
+    }
+}
+
+/// Artwork a theme uses: what it is, who made it, and under which license
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Credit {
+    pub work: String,
+    pub author: String,
+    pub license: String,
+    pub url: String,
+}
+
+impl Credit {
+    fn new(work: &str, author: &str, license: &str, url: &str) -> Self {
+        Self {
+            work: work.into(),
+            author: author.into(),
+            license: license.into(),
+            url: url.into(),
+        }
+    }
+}
+
+/// A built-in theme's SVGs, embedded at build time, by icon name
+macro_rules! svgs {
+    ($dir:literal: $($name:literal)*) => {
+        &[$(($name, include_bytes!(concat!("../data/themes/", $dir, "/", $name, ".svg")) as &[u8])),*]
+    };
+}
+
+type Svgs = &'static [(&'static str, &'static [u8])];
+
+const MECHANICAL_ICONS: Svgs = svgs!("mechanical/icons":
+    "Esc" "Home" "End" "PgUp" "PgDn" "Ins" "Del" "ScrLk" "PrtSc" "Pause" "Compose" "Numlock");
+const MECHANICAL_CAPS: Svgs = svgs!("mechanical/icons/caps":
+    "_blank" "Space" "Shift" "Caps" "Tab" "Backspace" "Enter" "Ctrl" "Alt" "Super");
+const MAC_CAPS: Svgs = svgs!("mac/icons/caps":
+    "_blank" "Space" "Shift" "Caps" "Tab" "Backspace" "Enter" "Ctrl" "Alt" "Super" "Esc"
+    "Left" "Right" "Up" "Down"
+    "A" "B" "C" "D" "E" "F" "G" "H" "I" "J" "K" "L" "M"
+    "N" "O" "P" "Q" "R" "S" "T" "U" "V" "W" "X" "Y" "Z"
+    "0" "1" "2" "3" "4" "5" "6" "7" "8" "9"
+    "Comma" "Period" "Semicolon" "Quote" "Slash" "BracketLeft" "BracketRight"
+    "Backslash" "Minus" "Equal" "Grave");
 
 impl Theme {
     pub fn builtin(builtin: BuiltinTheme) -> Self {
@@ -334,12 +408,46 @@ impl Theme {
             BuiltinTheme::Dark
             | BuiltinTheme::Light
             | BuiltinTheme::Frosted
-            | BuiltinTheme::Kiwi => (keys, None),
+            | BuiltinTheme::Kiwi
+            | BuiltinTheme::Mechanical
+            | BuiltinTheme::Mac => (keys, None),
         };
 
         let layout = match builtin {
             BuiltinTheme::Typewriter => Layout::Text,
             _ => Layout::Keys,
+        };
+
+        let (icons, caps, credits): (Svgs, Svgs, _) = match builtin {
+            BuiltinTheme::Mechanical => (
+                MECHANICAL_ICONS,
+                MECHANICAL_CAPS,
+                vec![
+                    Credit::new(
+                        "Keycaps adapted from Free Keyboard Graphics",
+                        "q2apro, after Mysid and Incnis Mrsi",
+                        "Public domain",
+                        "https://github.com/q2apro/keyboard-keys-speedflips",
+                    ),
+                    Credit::new(
+                        "Key legends adapted from Misonocons",
+                        "MisonoWorks",
+                        "CC BY 4.0",
+                        "https://github.com/misonoworks/misonocons",
+                    ),
+                ],
+            ),
+            BuiltinTheme::Mac => (
+                &[],
+                MAC_CAPS,
+                vec![Credit::new(
+                    "Keys adapted from SVG Keyboard Icons",
+                    "George Black",
+                    "MIT",
+                    "https://github.com/georgemblack/svg-keyboard-icons",
+                )],
+            ),
+            _ => (&[], &[], Vec::new()),
         };
 
         Self {
@@ -350,7 +458,21 @@ impl Theme {
             rail,
             font: None,
             recolor_icons: true,
-            icons: HashMap::new(),
+            icons: icons
+                .iter()
+                .map(|(name, bytes)| (name.to_string(), svg::Handle::from_memory(*bytes)))
+                .collect(),
+            caps: caps
+                .iter()
+                .map(|(name, bytes)| (name.to_string(), Cap::new(*bytes)))
+                .collect(),
+            // The mechanical caps' top face sits above their thick front edge
+            cap_label: if builtin == BuiltinTheme::Mechanical {
+                0.4
+            } else {
+                0.5
+            },
+            credits,
         }
     }
 
@@ -430,10 +552,38 @@ impl Theme {
                 repeats: Repeats::Badge,
                 expire: Expiry::Fade,
             },
+            // Keycap themes: the box only shows for a key with no cap. The labels
+            // are on the caps, and the "+" and badge are on the desktop.
+            BuiltinTheme::Mechanical | BuiltinTheme::Mac => {
+                let mac = builtin == BuiltinTheme::Mac;
+                let label = if mac {
+                    rgb(0.11, 0.11, 0.12)
+                } else {
+                    rgb(0.17, 0.17, 0.17)
+                };
+                KeyStyle {
+                    background: Fill::Solid(if mac {
+                        rgb(0.98, 0.98, 0.99)
+                    } else {
+                        rgb(0.85, 0.85, 0.85)
+                    }),
+                    pressed: rgb(0.75, 0.75, 0.77),
+                    border: stroke(rgba(0.0, 0.0, 0.0, 0.25)),
+                    radius: if mac { 10.0 } else { 4.0 },
+                    gap: 4.0,
+                    text: label,
+                    separator: rgba(1.0, 1.0, 1.0, 0.8),
+                    badge_text: label,
+                    badge_background: rgba(0.97, 0.97, 0.97, 0.9),
+                    combo_background: None,
+                    repeats: Repeats::Badge,
+                    expire: Expiry::Fade,
+                }
+            }
         }
     }
 
-    /// Read a user theme folder: `theme.ron` plus any `icons/*.svg`
+    /// Read a user theme folder: `theme.ron` plus any `icons/*.svg` and `icons/caps/*.svg`
     pub fn load(dir: &Path) -> Result<Self, String> {
         let file = dir.join(THEME_FILE);
         let text = fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
@@ -443,21 +593,37 @@ impl Theme {
         Ok(theme)
     }
 
-    /// Replace the theme's icons with the SVG files in `dir`
+    /// Replace the theme's icons with the SVG files in `dir`, and its caps with the ones in `dir/caps`
     pub fn load_icons(&mut self, dir: &Path) {
-        self.icons.clear();
-        for path in svg_files(dir) {
-            let Some(stem) = svg_stem(&path) else {
-                continue;
-            };
-            match fs::read(&path) {
-                Ok(bytes) => {
-                    self.icons
-                        .insert(stem.to_string(), svg::Handle::from_memory(bytes));
-                }
-                Err(e) => log::warn!("Skipping icon {}: {e}", path.display()),
+        self.icons = read_svgs(dir)
+            .map(|(stem, bytes)| (stem, svg::Handle::from_memory(bytes)))
+            .collect();
+        self.caps = read_svgs(&dir.join(CAPS_DIR))
+            .map(|(stem, bytes)| (stem, Cap::new(bytes)))
+            .collect();
+    }
+
+    /// The theme's icons and caps as files in its icon folder (`Enter.svg`,
+    /// `caps/Shift.svg`, ...), sorted
+    pub fn files(&self) -> Vec<(String, &[u8])> {
+        fn bytes(handle: &svg::Handle) -> Option<&[u8]> {
+            match handle.data() {
+                cosmic::iced::advanced::svg::Data::Bytes(bytes) => Some(bytes.as_ref()),
+                // Theme SVGs are always read into memory
+                cosmic::iced::advanced::svg::Data::Path(_) => None,
             }
         }
+        let icons = self
+            .icons
+            .iter()
+            .filter_map(|(stem, handle)| Some((format!("{stem}.svg"), bytes(handle)?)));
+        let caps = self
+            .caps
+            .iter()
+            .filter_map(|(stem, cap)| Some((format!("{CAPS_DIR}/{stem}.svg"), bytes(&cap.svg)?)));
+        let mut files: Vec<_> = icons.chain(caps).collect();
+        files.sort();
+        files
     }
 
     /// The theme as `theme.ron` text
@@ -483,6 +649,71 @@ impl Theme {
     pub fn icon(&self, key: &str) -> Option<&svg::Handle> {
         self.icons.get(icon_file_stem(key))
     }
+
+    /// The theme's own cap for `key`. Letters match either case, since it's the
+    /// same key, and a drag falls back to the cap of the button being dragged.
+    pub fn cap(&self, key: &str) -> Option<&Cap> {
+        let stem = icon_file_stem(key);
+        self.caps
+            .get(stem)
+            .or_else(|| self.caps.get(&stem.to_uppercase()))
+            .or_else(|| self.cap(crate::keystroke::dragged_button(key)?))
+    }
+
+    /// The cap for keys that don't have their own, with their label drawn on top
+    pub fn blank_cap(&self) -> Option<&Cap> {
+        self.caps.get(BLANK_CAP)
+    }
+}
+
+/// Width over height of an SVG, from its `viewBox` or else its `width` and
+/// `height`; 1 when neither can be read
+fn svg_aspect(bytes: &[u8]) -> f32 {
+    let text = String::from_utf8_lossy(bytes);
+    let Some(tag) = text.find("<svg").map(|start| &text[start..]) else {
+        return 1.0;
+    };
+    let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
+    // An attribute's value, skipping longer names that end the same (like `stroke-width`)
+    let attr = |name: &str| {
+        tag.match_indices(name).find_map(|(i, _)| {
+            if !tag[..i].ends_with(char::is_whitespace) {
+                return None;
+            }
+            let rest = tag[i + name.len()..]
+                .trim_start()
+                .strip_prefix('=')?
+                .trim_start();
+            let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+            let value = &rest[1..];
+            Some(&value[..value.find(quote)?])
+        })
+    };
+    // "120", "120px" and "32mm" all give 120 or 32; percentages give nothing
+    let length = |value: &str| {
+        let end = value
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(value.len());
+        (!value[end..].starts_with('%'))
+            .then(|| value[..end].parse::<f32>().ok())
+            .flatten()
+    };
+    let from_view_box = attr("viewBox").and_then(|view_box| {
+        let numbers: Vec<f32> = view_box
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|n| !n.is_empty())
+            .map(|n| n.parse().ok())
+            .collect::<Option<_>>()?;
+        match numbers[..] {
+            [_, _, w, h] => Some((w, h)),
+            _ => None,
+        }
+    });
+    let size = from_view_box.or_else(|| Some((length(attr("width")?)?, length(attr("height")?)?)));
+    match size {
+        Some((w, h)) if w > 0.0 && h > 0.0 => (w / h).clamp(0.2, 10.0),
+        _ => 1.0,
+    }
 }
 
 impl Default for Theme {
@@ -493,9 +724,12 @@ impl Default for Theme {
 
 const THEME_FILE: &str = "theme.ron";
 const ICONS_DIR: &str = "icons";
+/// Inside the icons folder
+const CAPS_DIR: &str = "caps";
+const BLANK_CAP: &str = "_blank";
 
 /// The icon file name (without `.svg`) for a key. Most keys use the name Kiwi
-/// already gives them ("LClick", "PgUp", "2Up", "Pad3"); the ones shown as a
+/// already gives them ("LClick", "PgUp", "2Up", "Pad3", "A"); the ones shown as a
 /// symbol get a readable name instead.
 pub fn icon_file_stem(key: &str) -> &str {
     match key {
@@ -503,8 +737,34 @@ pub fn icon_file_stem(key: &str) -> &str {
         "⇧" => "Shift",
         "⌫" => "Backspace",
         "␣" => "Space",
+        "←" => "Left",
+        "→" => "Right",
+        "↑" => "Up",
+        "↓" => "Down",
+        "," => "Comma",
+        "." => "Period",
+        ";" => "Semicolon",
+        "'" => "Quote",
+        "/" => "Slash",
+        "\\" => "Backslash",
+        "[" => "BracketLeft",
+        "]" => "BracketRight",
+        "-" => "Minus",
+        "=" => "Equal",
+        "`" => "Grave",
         other => other,
     }
+}
+
+/// The SVG files in a folder as (file name without `.svg`, contents)
+fn read_svgs(dir: &Path) -> impl Iterator<Item = (String, Vec<u8>)> {
+    svg_files(dir).into_iter().filter_map(|path| {
+        let stem = svg_stem(&path)?.to_string();
+        fs::read(&path)
+            .map_err(|e| log::warn!("Skipping icon {}: {e}", path.display()))
+            .ok()
+            .map(|bytes| (stem, bytes))
+    })
 }
 
 /// File name without `.svg`, for SVG files only
@@ -657,7 +917,8 @@ const MAX_IMPORT_FILES: usize = 1000;
 /// Unpack a theme zip into `themes_dir` and return the new theme's name.
 ///
 /// The zip needs a `theme.ron`, either at the top or inside one folder. Only
-/// that file and `icons/*.svg` next to it are copied; everything else is ignored.
+/// that file and `icons/*.svg` and `icons/caps/*.svg` next to it are copied;
+/// everything else is ignored.
 /// The theme is named after the zip file; an existing theme with that name is kept
 /// and the new one gets a number added.
 pub fn import(zip_path: &Path, themes_dir: &Path) -> Result<String, String> {
@@ -730,12 +991,22 @@ pub fn import(zip_path: &Path, themes_dir: &Path) -> Result<String, String> {
     let write = || -> std::io::Result<()> {
         fs::create_dir_all(dest.join(ICONS_DIR))?;
         fs::write(dest.join(THEME_FILE), &theme_text)?;
+        let icons = root.join(ICONS_DIR);
+        let caps = icons.join(CAPS_DIR);
         for (path, bytes) in &files {
-            let in_icons = path.parent() == Some(&root.join(ICONS_DIR));
-            if let (true, Some(file_name)) =
-                (in_icons && svg_stem(path).is_some(), path.file_name())
-            {
-                fs::write(dest.join(ICONS_DIR).join(file_name), bytes)?;
+            let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) else {
+                continue;
+            };
+            let folder = if parent == icons {
+                dest.join(ICONS_DIR)
+            } else if parent == caps {
+                dest.join(ICONS_DIR).join(CAPS_DIR)
+            } else {
+                continue;
+            };
+            if svg_stem(path).is_some() {
+                fs::create_dir_all(&folder)?;
+                fs::write(folder.join(file_name), bytes)?;
             }
         }
         Ok(())
@@ -756,20 +1027,17 @@ fn folder_name(name: &str) -> String {
         .to_string()
 }
 
-/// Write a theme to a zip: `theme.ron` at the top and the icons from `icons_dir` under `icons/`
-pub fn export(theme_text: &str, icons_dir: Option<&Path>, dest: &Path) -> Result<(), String> {
+/// Write a theme to a zip: `theme.ron` at the top and `files` (see [`Theme::files`]) under `icons/`
+pub fn export(theme_text: &str, files: &[(String, &[u8])], dest: &Path) -> Result<(), String> {
     let write = || -> zip::result::ZipResult<()> {
         let options = zip::write::SimpleFileOptions::default();
         let mut zip = zip::ZipWriter::new(fs::File::create(dest)?);
         zip.start_file(THEME_FILE, options)?;
         zip.write_all(theme_text.as_bytes())?;
 
-        for path in icons_dir.map(svg_files).unwrap_or_default() {
-            let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            zip.start_file(format!("{ICONS_DIR}/{file_name}"), options)?;
-            zip.write_all(&fs::read(&path)?)?;
+        for (file, bytes) in files {
+            zip.start_file(format!("{ICONS_DIR}/{file}"), options)?;
+            zip.write_all(bytes)?;
         }
         zip.finish()?;
         Ok(())
@@ -777,12 +1045,12 @@ pub fn export(theme_text: &str, icons_dir: Option<&Path>, dest: &Path) -> Result
     write().map_err(|e| format!("Can't write {}: {e}", dest.display()))
 }
 
-/// Save a theme as a folder in `themes_dir` and return the folder name. Icons are
-/// copied from `icons_from` unless they're already in that folder. An existing
-/// theme with the same name is replaced.
+/// Save a theme as a folder in `themes_dir` and return the folder name, with
+/// `files` (see [`Theme::files`]) written into its icon folder. An existing theme
+/// with the same name is replaced.
 pub fn save(
     theme_text: &str,
-    icons_from: Option<&Path>,
+    files: &[(String, &[u8])],
     themes_dir: &Path,
     name: &str,
 ) -> Result<String, String> {
@@ -795,14 +1063,12 @@ pub fn save(
     let write = || -> std::io::Result<()> {
         fs::create_dir_all(&icons_dest)?;
         fs::write(dest.join(THEME_FILE), theme_text)?;
-        let same_folder = icons_from
-            .is_some_and(|from| fs::canonicalize(from).ok() == fs::canonicalize(&icons_dest).ok());
-        if !same_folder {
-            for path in icons_from.map(svg_files).unwrap_or_default() {
-                if let Some(file_name) = path.file_name() {
-                    fs::copy(&path, icons_dest.join(file_name))?;
-                }
+        for (file, bytes) in files {
+            let path = icons_dest.join(file);
+            if let Some(folder) = path.parent() {
+                fs::create_dir_all(folder)?;
             }
+            fs::write(path, bytes)?;
         }
         Ok(())
     };
@@ -914,20 +1180,22 @@ mod tests {
         let dir = scratch("roundtrip");
         let themes = dir.join("themes");
         let user = themes.join("Mine");
-        fs::create_dir_all(user.join("icons")).unwrap();
+        fs::create_dir_all(user.join("icons/caps")).unwrap();
         fs::write(user.join("theme.ron"), "// hand-written\n(key: (gap: 9.0))").unwrap();
         fs::write(user.join("icons/Enter.svg"), SVG).unwrap();
+        fs::write(user.join("icons/caps/Shift.svg"), WIDE).unwrap();
 
         let zip = dir.join("Mine.zip");
         let mine = ThemeChoice::User("Mine".into());
         let text = mine.file_text(&themes).unwrap();
-        export(&text, mine.icons_dir(&themes).as_deref(), &zip).unwrap();
+        export(&text, &mine.load(&themes).files(), &zip).unwrap();
         // The name is taken, so the import gets a number
         assert_eq!(import(&zip, &themes).unwrap(), "Mine 2");
 
         let theme = Theme::load(&themes.join("Mine 2")).unwrap();
         assert_eq!(theme.key.gap, 9.0);
         assert!(theme.icon("↵").is_some());
+        assert_eq!(theme.cap("⇧").map(|cap| cap.aspect), Some(2.0));
         assert!(fs::read_to_string(themes.join("Mine 2/theme.ron"))
             .unwrap()
             .starts_with("// hand-written"));
@@ -941,7 +1209,7 @@ mod tests {
 
         let builtin = dir.join("Kiwi.zip");
         let kiwi = ThemeChoice::Builtin(BuiltinTheme::Kiwi);
-        export(&kiwi.file_text(&themes).unwrap(), None, &builtin).unwrap();
+        export(&kiwi.file_text(&themes).unwrap(), &[], &builtin).unwrap();
         let name = import(&builtin, &themes).unwrap();
         // Colors go through 8-bit hex, so compare what the file holds
         let border = |theme: Theme| ron::to_string(&theme.key.border).unwrap();
@@ -959,9 +1227,10 @@ mod tests {
         fs::create_dir_all(&icons).unwrap();
         fs::write(icons.join("Tab.svg"), SVG).unwrap();
 
-        let theme = Theme::builtin(BuiltinTheme::Tape);
+        let mut theme = Theme::builtin(BuiltinTheme::Tape);
+        theme.load_icons(&icons);
         assert_eq!(
-            save(&theme.to_ron(), Some(&icons), &themes, "Talk/mode!").unwrap(),
+            save(&theme.to_ron(), &theme.files(), &themes, "Talk/mode!").unwrap(),
             "Talkmode"
         );
         let saved = Theme::load(&themes.join("Talkmode")).unwrap();
@@ -969,19 +1238,58 @@ mod tests {
         assert_eq!(saved.to_ron(), theme.to_ron());
 
         // Saving over itself keeps its icons
-        let own_icons = ThemeChoice::User("Talkmode".into()).icons_dir(&themes);
-        save(
-            "(key: (gap: 3.0))",
-            own_icons.as_deref(),
-            &themes,
-            "Talkmode",
-        )
-        .unwrap();
+        save("(key: (gap: 3.0))", &saved.files(), &themes, "Talkmode").unwrap();
         let saved = Theme::load(&themes.join("Talkmode")).unwrap();
         assert_eq!(saved.key.gap, 3.0);
         assert!(saved.icon("Tab").is_some());
 
-        assert!(save("()", None, &themes, " ! ").is_err());
+        // A customized built-in keycap theme keeps its built-in caps and icons
+        let mechanical = Theme::builtin(BuiltinTheme::Mechanical);
+        save(&mechanical.to_ron(), &mechanical.files(), &themes, "Clacky").unwrap();
+        let saved = Theme::load(&themes.join("Clacky")).unwrap();
+        assert_eq!(saved.caps, mechanical.caps);
+        assert_eq!(saved.icons.len(), mechanical.icons.len());
+        assert_eq!(saved.cap_label, 0.4);
+        assert_eq!(saved.credits, mechanical.credits);
+
+        assert!(save("()", &[], &themes, " ! ").is_err());
+    }
+
+    /// Two wide, one high
+    const WIDE: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 60'/>";
+
+    #[test]
+    fn caps_are_measured_and_found() {
+        assert_eq!(svg_aspect(WIDE.as_bytes()), 2.0);
+        assert_eq!(
+            svg_aspect(br#"<svg stroke-width="9" height="53.5" width="107mm">"#),
+            2.0
+        );
+        assert_eq!(svg_aspect(br#"<svg width="100%" height="100%">"#), 1.0);
+        assert_eq!(svg_aspect(b"not an svg"), 1.0);
+
+        let mac = Theme::builtin(BuiltinTheme::Mac);
+        let shift = mac.cap("⇧").unwrap().aspect;
+        assert!(shift > 1.4 && shift < 2.0, "{shift}");
+        // Typed lowercase letters use the letter's cap; symbols use their file name
+        assert_eq!(mac.cap("a"), mac.cap("A"));
+        assert!(mac.cap("a").is_some() && mac.cap("/").is_some());
+        assert!(mac.cap("LClick").is_none() && mac.blank_cap().is_some());
+
+        // A drag without its own cap uses the button's
+        let mut theme = Theme::default();
+        theme
+            .caps
+            .insert("LClick".into(), Cap::new(WIDE.as_bytes()));
+        assert_eq!(theme.cap("LDrag"), theme.cap("LClick"));
+        assert!(theme.cap("LDrag").is_some() && theme.cap("TapDrag").is_none());
+        theme.caps.insert("LDrag".into(), Cap::new(SVG.as_bytes()));
+        assert_eq!(theme.cap("LDrag").unwrap().aspect, 1.0);
+
+        // Every built-in keycap theme has a blank cap for the keys without one
+        for builtin in [BuiltinTheme::Mechanical, BuiltinTheme::Mac] {
+            assert!(Theme::builtin(builtin).blank_cap().is_some(), "{builtin:?}");
+        }
     }
 
     #[test]
