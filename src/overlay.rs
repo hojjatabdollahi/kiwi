@@ -557,7 +557,7 @@ fn live_keystrokes(s: &SharedState) -> (Vec<Keystroke>, bool) {
         // is still down) leaves its place empty instead of shifting the rest
         if let Some(mut held) = Keystroke::from_modifiers(&s.peak_modifiers, true) {
             held.released_parts = released_modifiers(&s.peak_modifiers, &s.modifiers);
-            display.push(held);
+            push_or_count_up(&mut display, held);
         }
     }
     let held = display.len() > history_len;
@@ -1163,6 +1163,30 @@ mod tests {
         assert!(!held);
         assert!(keys[0].pressed);
         assert_eq!(keys[0].count, 2);
+    }
+
+    #[test]
+    fn tapping_super_again_glides_onto_the_last_tap() {
+        let mut state = SharedState::default();
+        let super_key = KeyModifiers {
+            super_key: true,
+            ..Default::default()
+        };
+        state.history.push(Keystroke::single("x", false));
+        state
+            .history
+            .push(Keystroke::from_modifiers(&super_key, false).unwrap());
+        Snapshot::take(&mut state, false);
+        state.shifted_at = None;
+
+        // Pressing Super again soon counts up, like a repeated click
+        state.modifiers = super_key.clone();
+        state.peak_modifiers = super_key;
+        let frame = Snapshot::take(&mut state, false);
+        assert_eq!(frame.keystrokes.len(), 2);
+        assert_eq!(frame.keystrokes[1].count, 2);
+        assert!(state.merged_at.is_some());
+        assert!(state.shifted_at.is_none());
     }
 
     #[test]

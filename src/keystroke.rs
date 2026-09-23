@@ -715,14 +715,15 @@ fn with_badge<'a, M: 'a>(
             ..Default::default()
         }
     }));
+    // Centered on the key's top-right corner, clear of the icon. It's only drawn
+    // there, so it never makes the key or the rail any bigger
     cosmic::iced::widget::stack![
         widget,
-        widget::container(badge)
+        widget::container(crate::widgets::Offset::new(badge, 0.5, -0.5))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(iced::alignment::Horizontal::Right)
-            .align_y(iced::alignment::Vertical::Top)
-            .padding(key_size * 0.06),
+            .align_y(iced::alignment::Vertical::Top),
     ]
     .into()
 }

@@ -325,6 +325,88 @@ impl<'a, M: 'a> From<Reveal<'a, M>> for Element<'a, M> {
     }
 }
 
+/// Draws its content shifted by a fraction of its own size, while laying out as if
+/// it weren't, so whatever hangs over the edge never makes room for itself
+pub struct Offset<'a, M> {
+    content: Element<'a, M>,
+    x: f32,
+    y: f32,
+}
+
+impl<'a, M> Offset<'a, M> {
+    /// Shift by `x` of the content's width and `y` of its height
+    pub fn new(content: impl Into<Element<'a, M>>, x: f32, y: f32) -> Self {
+        Self {
+            content: content.into(),
+            x,
+            y,
+        }
+    }
+}
+
+impl<M> cosmic::widget::Widget<M, cosmic::Theme, cosmic::Renderer> for Offset<'_, M> {
+    fn size(&self) -> cosmic::iced::Size<Length> {
+        self.content.as_widget().size()
+    }
+
+    fn children(&self) -> Vec<cosmic::iced::core::widget::Tree> {
+        vec![cosmic::iced::core::widget::Tree::new(&self.content)]
+    }
+
+    fn diff(&mut self, tree: &mut cosmic::iced::core::widget::Tree) {
+        tree.diff_children(std::slice::from_mut(&mut self.content));
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut cosmic::iced::core::widget::Tree,
+        renderer: &cosmic::Renderer,
+        limits: &cosmic::iced::core::layout::Limits,
+    ) -> cosmic::iced::core::layout::Node {
+        let content = self
+            .content
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits);
+        cosmic::iced::core::layout::Node::with_children(content.size(), vec![content])
+    }
+
+    fn draw(
+        &self,
+        tree: &cosmic::iced::core::widget::Tree,
+        renderer: &mut cosmic::Renderer,
+        theme: &cosmic::Theme,
+        style: &cosmic::iced::core::renderer::Style,
+        layout: cosmic::iced::core::Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        use cosmic::iced::core::Renderer as _;
+
+        let Some(content) = layout.children().next() else {
+            return;
+        };
+        let size = content.bounds().size();
+        let shift = cosmic::iced::Vector::new(self.x * size.width, self.y * size.height);
+        renderer.with_translation(shift, |renderer| {
+            self.content.as_widget().draw(
+                &tree.children[0],
+                renderer,
+                theme,
+                style,
+                content,
+                cursor,
+                viewport,
+            );
+        });
+    }
+}
+
+impl<'a, M: 'a> From<Offset<'a, M>> for Element<'a, M> {
+    fn from(offset: Offset<'a, M>) -> Self {
+        Element::new(offset)
+    }
+}
+
 /// A dashed rounded outline filling its space, for "add something here" spots.
 /// Stack it over the content; it doesn't take any input.
 pub fn dashed_outline<'a, M: 'a>(radius: f32) -> Element<'a, M> {

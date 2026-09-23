@@ -694,6 +694,11 @@ impl Theme {
     /// same key, and a drag falls back to the cap of the button being dragged.
     pub fn cap(&self, key: &str) -> Option<&Cap> {
         let stem = icon_file_stem(key);
+        // A full-length space bar takes far too much room on screen, so Space is
+        // drawn on the blank cap with the space icon, as wide as a letter
+        if stem == "Space" {
+            return None;
+        }
         self.caps
             .get(stem)
             .or_else(|| self.caps.get(&stem.to_uppercase()))
