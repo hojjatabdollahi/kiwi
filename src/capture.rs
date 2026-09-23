@@ -97,6 +97,9 @@ pub enum InputEvent {
     TouchMotion { slot: u32, x: f32, y: f32 },
     /// Touchscreen contact ended (lifted or cancelled)
     TouchUp { slot: u32 },
+    /// Tablet pen tip, pen barrel button, or pad button. `label` is the display name
+    /// ("PenTap", "Eraser", "Pen1".."Pen3", "Pad1"..).
+    Tablet { label: String, state: ButtonState },
 }
 
 /// Resolution used to turn libinput's device coordinates into 0.0..1.0 values.
@@ -125,6 +128,8 @@ pub struct InputCapture {
     libinput: Libinput,
     swipe_state: SwipeState,
     touchpad_scroll: ScrollAccumulator,
+    /// Pen tip-down position in mm, cleared once the pen has travelled far enough to count as a drag
+    pen_down: Option<(f64, f64)>,
 }
 
 impl InputCapture {
@@ -153,6 +158,7 @@ impl InputCapture {
             libinput,
             swipe_state: SwipeState::default(),
             touchpad_scroll: ScrollAccumulator::default(),
+            pen_down: None,
         })
     }
 
@@ -403,6 +409,63 @@ impl InputCapture {
                         // Frame events just delimit a set of touch points
                         _ => {}
                     }
+                }
+                Event::Tablet(tool_event) => {
+                    use input::event::tablet_tool::{
+                        TabletToolEvent, TabletToolEventTrait, TabletToolType, TipState,
+                    };
+                    match tool_event {
+                        TabletToolEvent::Tip(ref tip) => {
+                            let eraser =
+                                matches!(tip.tool().tool_type(), Some(TabletToolType::Eraser));
+                            let label = if eraser { "Eraser" } else { "PenTap" };
+                            let state = match tip.tip_state() {
+                                TipState::Down => {
+                                    self.pen_down = Some((tip.x(), tip.y()));
+                                    ButtonState::Pressed
+                                }
+                                TipState::Up => {
+                                    self.pen_down = None;
+                                    ButtonState::Released
+                                }
+                            };
+                            results.push(InputEvent::Tablet {
+                                label: label.to_string(),
+                                state,
+                            });
+                        }
+                        TabletToolEvent::Axis(ref axis) => {
+                            // Pressure changes arrive as Axis events too, so only report motion
+                            // once the tip has travelled a real distance since touching down.
+                            // ponytail: fixed 3mm threshold, make configurable if taps show as drags
+                            if let Some((x0, y0)) = self.pen_down {
+                                let (dx, dy) = (axis.x() - x0, axis.y() - y0);
+                                if dx * dx + dy * dy > 9.0 {
+                                    self.pen_down = None;
+                                    results.push(InputEvent::MouseMotion { dx, dy });
+                                }
+                            }
+                        }
+                        TabletToolEvent::Button(ref btn) => {
+                            let label = match btn.button() {
+                                0x14b => "Pen1", // BTN_STYLUS
+                                0x14c => "Pen2", // BTN_STYLUS2
+                                0x149 => "Pen3", // BTN_STYLUS3
+                                _ => continue,
+                            };
+                            results.push(InputEvent::Tablet {
+                                label: label.to_string(),
+                                state: btn.button_state(),
+                            });
+                        }
+                        _ => {} // Ignore proximity
+                    }
+                }
+                Event::TabletPad(input::event::tablet_pad::TabletPadEvent::Button(ref btn)) => {
+                    results.push(InputEvent::Tablet {
+                        label: format!("Pad{}", btn.button_number() + 1),
+                        state: btn.button_state(),
+                    });
                 }
                 _ => {}
             }

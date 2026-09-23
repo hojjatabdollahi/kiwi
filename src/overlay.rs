@@ -87,8 +87,8 @@ pub struct SharedState {
     /// Track if a non-modifier key was pressed while modifiers were held
     /// (to know if we should show modifier-only tap on release)
     pub key_pressed_with_modifiers: bool,
-    /// Currently pressed mouse button: (button_string, is_touchpad, press_time, has_moved)
-    pub current_mouse: Option<(String, bool, std::time::Instant, bool)>,
+    /// Currently pressed mouse/touchpad/pen button: (button_string, press_time, has_moved)
+    pub current_mouse: Option<(String, std::time::Instant, bool)>,
 }
 
 impl SharedState {
@@ -398,14 +398,12 @@ pub fn view_overlay(
 
             // Build current "pressed" keystroke from state
             // Priority: mouse action > key > modifiers-only
-            if let Some((ref btn_str, is_touchpad, _, has_moved)) = s.current_mouse {
+            if let Some((ref btn_str, _, has_moved)) = s.current_mouse {
                 // Mouse button is pressed - show it (with modifiers if any)
-                let display_str = if has_moved && btn_str == "LClick" {
-                    "LDrag".to_string()
-                } else if has_moved && is_touchpad && btn_str == "Tap" {
-                    "TapDrag".to_string()
+                let display_str = if has_moved {
+                    crate::keystroke::drag_variant(btn_str).unwrap_or(btn_str)
                 } else {
-                    btn_str.clone()
+                    btn_str.as_str()
                 };
 
                 let mouse_keystroke = if s.modifiers.any() {

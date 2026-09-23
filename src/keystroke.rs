@@ -64,6 +64,24 @@ const ICON_FOUR_UP: &[u8] = include_bytes!("../data/icons/kiwi-four-up.svg");
 const ICON_FOUR_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-four-down.svg");
 const ICON_TAP_DRAG: &[u8] = include_bytes!("../data/icons/kiwi-tap-drag.svg");
 
+// Tablet icons
+const ICON_PEN_TAP: &[u8] = include_bytes!("../data/icons/kiwi-pen-tap.svg");
+const ICON_PEN_DRAG: &[u8] = include_bytes!("../data/icons/kiwi-pen-drag.svg");
+const ICON_PEN_BUTTON_1: &[u8] = include_bytes!("../data/icons/kiwi-pen-button-1.svg");
+const ICON_PEN_BUTTON_2: &[u8] = include_bytes!("../data/icons/kiwi-pen-button-2.svg");
+const ICON_ERASER: &[u8] = include_bytes!("../data/icons/kiwi-eraser.svg");
+const ICON_ERASER_DRAG: &[u8] = include_bytes!("../data/icons/kiwi-eraser-drag.svg");
+const ICON_PAD: [&[u8]; 8] = [
+    include_bytes!("../data/icons/kiwi-pad-1.svg"),
+    include_bytes!("../data/icons/kiwi-pad-2.svg"),
+    include_bytes!("../data/icons/kiwi-pad-3.svg"),
+    include_bytes!("../data/icons/kiwi-pad-4.svg"),
+    include_bytes!("../data/icons/kiwi-pad-5.svg"),
+    include_bytes!("../data/icons/kiwi-pad-6.svg"),
+    include_bytes!("../data/icons/kiwi-pad-7.svg"),
+    include_bytes!("../data/icons/kiwi-pad-8.svg"),
+];
+
 // Media keys (symbol only)
 const ICON_VOLUME_UP: &[u8] = include_bytes!("../data/icons/kiwi-volume-plus-symbol.svg");
 const ICON_VOLUME_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-volume-minus-symbol.svg");
@@ -258,8 +276,23 @@ fn plus_font_size_for_key(key_size: f32) -> f32 {
 }
 
 /// Returns (icon_data, should_apply_color) based on key and icon style preference
+/// The label to show when a button was moved while held (e.g. "LClick" -> "LDrag")
+pub fn drag_variant(key: &str) -> Option<&'static str> {
+    match key {
+        "LClick" => Some("LDrag"),
+        "Tap" => Some("TapDrag"),
+        "PenTap" => Some("PenDrag"),
+        "Eraser" => Some("EraserDrag"),
+        _ => None,
+    }
+}
+
 fn get_icon_for_key_with_style(key: &str, icon_style: IconStyle) -> Option<(&'static [u8], bool)> {
     let use_text = matches!(icon_style, IconStyle::Text);
+
+    if let Some(n) = key.strip_prefix("Pad").and_then(|n| n.parse::<usize>().ok()) {
+        return ICON_PAD.get(n.wrapping_sub(1)).map(|icon| (*icon, true));
+    }
 
     match key {
         // Keys with symbol and text variants
@@ -355,6 +388,13 @@ fn get_icon_for_key_with_style(key: &str, icon_style: IconStyle) -> Option<(&'st
         // Drag gestures
         "LDrag" => Some((ICON_CLICK_DRAG, true)),
         "TapDrag" => Some((ICON_TAP_DRAG, true)),
+        // Tablet
+        "PenTap" => Some((ICON_PEN_TAP, true)),
+        "PenDrag" => Some((ICON_PEN_DRAG, true)),
+        "Pen1" => Some((ICON_PEN_BUTTON_1, true)),
+        "Pen2" | "Pen3" => Some((ICON_PEN_BUTTON_2, true)),
+        "Eraser" => Some((ICON_ERASER, true)),
+        "EraserDrag" => Some((ICON_ERASER_DRAG, true)),
         _ => None,
     }
 }
@@ -721,4 +761,21 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
             iced::Alignment::Start
         })
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tablet_labels_resolve() {
+        let icon = |k| get_icon_for_key_with_style(k, IconStyle::Symbol).map(|(bytes, _)| bytes);
+        assert_eq!(icon("Pad1"), Some(ICON_PAD[0]));
+        assert_eq!(icon("Pad8"), Some(ICON_PAD[7]));
+        assert!(icon("Pad0").is_none() && icon("Pad9").is_none() && icon("Padx").is_none());
+        assert_eq!(icon("Pen3"), icon("Pen2"));
+        assert_eq!(drag_variant("PenTap"), Some("PenDrag"));
+        assert_eq!(drag_variant("Eraser"), Some("EraserDrag"));
+        assert_eq!(drag_variant("Pen1"), None);
+    }
 }

@@ -11,7 +11,7 @@ use xkbcommon::xkb;
 use crate::capture::{Axis, ButtonState, InputCapture, InputEvent, KeyState, SwipeDirection};
 use crate::config::KeyDisplayMode;
 use crate::cosmic_xkb::XkbConfig;
-use crate::keystroke::{KeyModifiers, Keystroke};
+use crate::keystroke::{drag_variant, KeyModifiers, Keystroke};
 use crate::overlay::{push_history, SharedState};
 
 /// XKB state wrapper for character lookup
@@ -474,52 +474,24 @@ fn process_input_event(
                     _ => return,
                 };
 
-                match btn_state {
-                    ButtonState::Pressed => {
-                        // Track the pressed button with timestamp
-                        s.current_mouse = Some((
-                            btn_str.to_string(),
-                            is_touchpad,
-                            std::time::Instant::now(),
-                            false,
-                        ));
-                        // Mark that an action occurred with modifiers
-                        if s.modifiers.any() {
-                            s.key_pressed_with_modifiers = true;
-                        }
-                    }
-                    ButtonState::Released => {
-                        // Check if this was a drag
-                        let was_drag = s
-                            .current_mouse
-                            .as_ref()
-                            .map(|(_, _, _, has_moved)| *has_moved)
-                            .unwrap_or(false);
-
-                        let final_str = if was_drag && btn_str == "LClick" {
-                            "LDrag"
-                        } else if was_drag && is_touchpad && btn_str == "Tap" {
-                            "TapDrag"
-                        } else {
-                            btn_str
-                        };
-
-                        s.current_mouse = None;
-
-                        let keystroke = if s.modifiers.any() {
-                            Keystroke::combination(&s.modifiers, final_str.to_string(), false)
-                        } else {
-                            Keystroke::single(final_str.to_string(), false)
-                        };
-                        push_history(&mut s.history, keystroke);
-                    }
+                button_event(&mut s, btn_str, btn_state);
+            }
+        }
+        InputEvent::Tablet {
+            label,
+            state: btn_state,
+        } => {
+            if let Ok(mut s) = state.lock() {
+                if !s.enabled || !s.show_mouse {
+                    return;
                 }
+                button_event(&mut s, &label, btn_state);
             }
         }
         InputEvent::MouseMotion { .. } => {
             // Mark current mouse button as dragging if we move while pressed
             if let Ok(mut s) = state.lock() {
-                if let Some((_, _, _, ref mut has_moved)) = s.current_mouse {
+                if let Some((_, _, ref mut has_moved)) = s.current_mouse {
                     *has_moved = true;
                 }
             }
@@ -625,6 +597,40 @@ fn process_input_event(
                 };
                 push_history(&mut s.history, keystroke);
             }
+        }
+    }
+}
+
+/// Record a button press or release (mouse, touchpad, or tablet) in shared state
+fn button_event(s: &mut SharedState, label: &str, btn_state: ButtonState) {
+    match btn_state {
+        ButtonState::Pressed => {
+            s.current_mouse = Some((label.to_string(), std::time::Instant::now(), false));
+            // Mark that an action occurred with modifiers
+            if s.modifiers.any() {
+                s.key_pressed_with_modifiers = true;
+            }
+        }
+        ButtonState::Released => {
+            let was_drag = s
+                .current_mouse
+                .as_ref()
+                .map(|(_, _, has_moved)| *has_moved)
+                .unwrap_or(false);
+            let final_str = if was_drag {
+                drag_variant(label).unwrap_or(label)
+            } else {
+                label
+            };
+
+            s.current_mouse = None;
+
+            let keystroke = if s.modifiers.any() {
+                Keystroke::combination(&s.modifiers, final_str.to_string(), false)
+            } else {
+                Keystroke::single(final_str.to_string(), false)
+            };
+            push_history(&mut s.history, keystroke);
         }
         InputEvent::TouchDown { slot, x, y } => {
             if let Ok(mut s) = state.lock() {

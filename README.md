@@ -14,6 +14,7 @@ A key visualizer for [COSMIC DE](https://github.com/pop-os/cosmic-epoch). Shows 
 - Mouse button and scroll wheel display
 - Touchpad gesture recognition (swipes, holds)
 - Touchscreen contact markers (shows where your fingers are touching)
+- Tablet pen taps, drags, eraser, barrel buttons, and pad buttons
 - System tray integration
 - Configurable position, size, colors, and ...
 - Multiple color palettes
