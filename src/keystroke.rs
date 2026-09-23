@@ -102,8 +102,10 @@ const ICON_INSERT: &[u8] = include_bytes!("../data/icons/kiwi-insert-symbol.svg"
 // Special emblems
 const ICON_PRESSED_DOWN: &[u8] = include_bytes!("../data/icons/kiwi-pressed-down.svg");
 
-/// Threshold for combining repeated keystrokes (in milliseconds)
-pub const REPEAT_THRESHOLD_MS: u128 = 200;
+/// Pressing the same key again within this long (in milliseconds) counts up on
+/// the last keystroke instead of adding another, so steady repeated clicking or
+/// typing doesn't keep pushing the row along
+pub const REPEAT_THRESHOLD_MS: u128 = 800;
 
 /// Represents a keystroke to display
 #[derive(Debug, Clone)]
@@ -942,7 +944,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
             | OverlayPosition::BottomCenter
     );
     let gap = theme.key.gap;
-    let (opening, arriving) = slide_phases(motion.shifted_at);
+    let (opening, arriving) = slide_phases(motion.shifted_at, motion.rushed);
 
     // While the held combination grows (Ctrl, then Ctrl + Shift…), the newest key
     // widens smoothly: its keys glide inward and the new one slides in from the edge
@@ -982,7 +984,36 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         let inside = ((window - distance) / room).clamp(0.0, 1.0);
         let opacity = key_opacity(theme, k, fade_duration) * dim * inside;
 
-        let mut widget = keystroke_widget(k, key_size, opacity, theme, icon_style);
+        let merging = if i == 0 {
+            merge_progress(motion.merged_at)
+        } else {
+            1.0
+        };
+        let mut widget = if merging < 1.0 {
+            // A repeat: a copy of the key glides in from the edge onto it, and its
+            // count goes up once the copy lands. Nothing else moves.
+            let before = Keystroke {
+                count: k.count.saturating_sub(1).max(1),
+                ..(*k).clone()
+            };
+            let copy = Keystroke {
+                count: 1,
+                ..(*k).clone()
+            };
+            let copy_opacity = opacity * ((1.0 - merging) / 0.25).min(1.0);
+            cosmic::iced::widget::stack![
+                keystroke_widget(&before, key_size, opacity, theme, icon_style),
+                Reveal::new(
+                    keystroke_widget(&copy, key_size, copy_opacity, theme, icon_style),
+                    1.0,
+                    edge_on_right,
+                )
+                .nudge(1.0 - merging),
+            ]
+            .into()
+        } else {
+            keystroke_widget(k, key_size, opacity, theme, icon_style)
+        };
         if i == 0 && grown < 1.0 {
             widget = Reveal::new(widget, grown, false).into();
         }
@@ -1079,8 +1110,23 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
 pub struct Motion {
     /// When the newest keystroke appeared at the edge
     pub shifted_at: Option<Instant>,
+    /// When the same key was pressed again and its copy started gliding onto
+    /// the newest keystroke
+    pub merged_at: Option<Instant>,
+    /// It arrived while the one before was still sliding in (fast clicking or
+    /// typing), so it slides in quicker and is visible from the start
+    pub rushed: bool,
     /// When the held combination grew, and how many keys it had before
     pub slot_grew: Option<(Instant, usize)>,
+}
+
+/// How long a repeat's copy takes to glide onto the keystroke it counts up
+pub const MERGE_SECS: f32 = 0.2;
+
+/// How far a repeat's copy has glided onto its keystroke, eased (1.0 when done)
+fn merge_progress(merged_at: Option<Instant>) -> f32 {
+    let t = merged_at.map_or(1.0, |at| (at.elapsed().as_secs_f32() / MERGE_SECS).min(1.0));
+    1.0 - (1.0 - t).powi(3)
 }
 
 /// How long a held combination takes to widen when a key joins it
@@ -1118,9 +1164,16 @@ const OPENING_SHARE: f32 = 0.55;
 
 /// How far along the two steps of a slide are, each eased from 0.0 to 1.0: the
 /// row opening room, then the key arriving in it. Both are 1.0 when nothing slides.
-fn slide_phases(shifted_at: Option<Instant>) -> (f32, f32) {
-    let t = shifted_at.map_or(1.0, |at| (at.elapsed().as_secs_f32() / SLIDE_SECS).min(1.0));
+fn slide_phases(shifted_at: Option<Instant>, rushed: bool) -> (f32, f32) {
     let ease = |x: f32| 1.0 - (1.0 - x.clamp(0.0, 1.0)).powi(3);
+    if rushed {
+        // Keys coming this fast would never get past the hidden first step, so
+        // the room opens and the key shows at the same time, in half the time
+        let t = shifted_at.map_or(1.0, |at| at.elapsed().as_secs_f32() / (SLIDE_SECS * 0.5));
+        let eased = ease(t);
+        return (eased, eased.max(0.6));
+    }
+    let t = shifted_at.map_or(1.0, |at| (at.elapsed().as_secs_f32() / SLIDE_SECS).min(1.0));
     (
         ease(t / OPENING_SHARE),
         ease((t - OPENING_SHARE) / (1.0 - OPENING_SHARE)),
@@ -1529,16 +1582,19 @@ mod tests {
 
     #[test]
     fn room_opens_before_the_key_arrives() {
-        assert_eq!(slide_phases(None), (1.0, 1.0));
-        let (opening, arriving) = slide_phases(Some(Instant::now()));
+        assert_eq!(slide_phases(None, false), (1.0, 1.0));
+        let (opening, arriving) = slide_phases(Some(Instant::now()), false);
         assert!(opening < 0.1 && arriving == 0.0);
         // Halfway through the opening step, the key hasn't started arriving
         let at =
             Instant::now() - std::time::Duration::from_secs_f32(SLIDE_SECS * OPENING_SHARE / 2.0);
-        let (opening, arriving) = slide_phases(Some(at));
+        let (opening, arriving) = slide_phases(Some(at), false);
         assert!(opening > 0.5 && opening < 1.0 && arriving == 0.0);
         let done = Instant::now() - std::time::Duration::from_secs_f32(SLIDE_SECS);
-        assert_eq!(slide_phases(Some(done)), (1.0, 1.0));
+        assert_eq!(slide_phases(Some(done), false), (1.0, 1.0));
+        // A rushed key is visible right away
+        let (_, arriving) = slide_phases(Some(Instant::now()), true);
+        assert!(arriving >= 0.6);
     }
 
     #[test]

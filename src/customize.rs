@@ -632,6 +632,28 @@ impl KiwiApp {
     }
 }
 
+/// A setting's label with its control on the right. When the drawer is too
+/// narrow for both, the control moves onto its own line, still on the right.
+fn setting_row<'a>(
+    label: impl Into<std::borrow::Cow<'a, str>> + 'a,
+    control: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let label = label.into();
+    // The label never gets narrower than its text (estimated), and takes whatever
+    // room the control leaves; if even that doesn't fit, the control wraps
+    let label_width = label.chars().count() as f32 * 7.5 + 8.0;
+    widget::flex_row(vec![
+        widget::text::body(label).width(Length::Fill).into(),
+        control.into(),
+    ])
+    .min_item_width(label_width)
+    .justify_content(widget::JustifyContent::FlexEnd)
+    .align_items(Alignment::Center)
+    .spacing(8)
+    .width(Length::Fill)
+    .into()
+}
+
 /// The drawer's content and footer
 pub fn view<'a>(
     draft: &'a Draft,
@@ -764,7 +786,7 @@ pub fn view<'a>(
     // A color row, with the picker under it while it's open
     let add_color =
         move |section: settings::Section<'a, Message>, label: &'static str, field: ColorField| {
-            let section = section.add(settings::flex_item(label, chips(field)));
+            let section = section.add(setting_row(label, chips(field)));
             match picker(field) {
                 Some(picker) => section.add(picker),
                 None => section,
@@ -773,7 +795,7 @@ pub fn view<'a>(
     // Border color, then border width on its own row (two gradient chips leave no room)
     let add_border =
         move |section: settings::Section<'a, Message>, field: ColorField, width: NumberField| {
-            let section = section.add(settings::flex_item("Border", chips(field)));
+            let section = section.add(setting_row("Border", chips(field)));
             let section = match picker(field) {
                 Some(picker) => section.add(picker),
                 None => section,
@@ -783,7 +805,7 @@ pub fn view<'a>(
 
     let layout = settings::section()
         .title("Layout")
-        .add(settings::flex_item(
+        .add(setting_row(
             "Show",
             widget::segmented_control::horizontal(&draft.layout_model)
                 .on_activate(move |e| send(CustomizeMessage::LayoutTab(e)))
@@ -830,7 +852,7 @@ pub fn view<'a>(
                 number(NumberField::RailRadius),
             ))
             .add(settings::item("Padding", number(NumberField::RailPadding)))
-            .add(settings::flex_item(
+            .add(setting_row(
                 "Show the rail",
                 widget::segmented_control::horizontal(&draft.rail_visibility_model)
                     .on_activate(move |e| send(CustomizeMessage::RailVisibilityTab(e)))
@@ -847,7 +869,7 @@ pub fn view<'a>(
     keys = add_color(keys, "Background", ColorField::KeyBackground);
     keys = add_color(keys, "While held", ColorField::KeyPressed);
     keys = add_color(keys, "Text", ColorField::KeyText);
-    keys = keys.add(settings::flex_item(
+    keys = keys.add(setting_row(
         "Font",
         widget::button::standard(format!("{} ▾", theme.font.as_deref().unwrap_or(KIWI_FONT)))
             .on_press(send(CustomizeMessage::ToggleFontPicker)),
@@ -865,13 +887,13 @@ pub fn view<'a>(
             "Gap between keys",
             number(NumberField::KeyGap),
         ))
-        .add(settings::flex_item(
+        .add(setting_row(
             "Repeats",
             widget::segmented_control::horizontal(&draft.repeats_model)
                 .on_activate(move |e| send(CustomizeMessage::RepeatsTab(e)))
                 .width(Length::Shrink),
         ))
-        .add(settings::flex_item(
+        .add(setting_row(
             "Expired keys",
             widget::segmented_control::horizontal(&draft.expiry_model)
                 .on_activate(move |e| send(CustomizeMessage::ExpiryTab(e)))

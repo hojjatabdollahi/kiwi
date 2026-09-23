@@ -78,6 +78,12 @@ pub struct SharedState {
     held_parts: usize,
     /// When a new keystroke last appeared at the edge, which starts the slide
     shifted_at: Option<std::time::Instant>,
+    /// Whether it arrived while the one before was still sliding in
+    rushed: bool,
+    /// The newest keystroke's keys and count last frame, to notice a repeat
+    newest: Option<(Vec<String>, u32)>,
+    /// When a repeat's copy started gliding onto the newest keystroke
+    merged_at: Option<std::time::Instant>,
     /// When the held combination grew, and how many keys it had before
     slot_grew: Option<(std::time::Instant, usize)>,
     /// Key display mode (typed character vs physical key)
@@ -164,7 +170,7 @@ impl SharedState {
     /// True while keys are sliding: one just left the slot, or one is shrinking
     /// away as it expires. The overlay then needs frequent redraws.
     pub fn is_sliding(&self) -> bool {
-        use crate::keystroke::{expiring_secs, SLIDE_SECS, SLOT_GROW_SECS};
+        use crate::keystroke::{expiring_secs, MERGE_SECS, SLIDE_SECS, SLOT_GROW_SECS};
         let expiring = |k: &Keystroke| {
             let left = self.fade_duration - k.age_secs();
             let secs = expiring_secs(&self.theme, k, self.fade_duration);
@@ -175,6 +181,9 @@ impl SharedState {
             || self
                 .slot_grew
                 .is_some_and(|(at, _)| at.elapsed().as_secs_f32() < SLOT_GROW_SECS)
+            || self
+                .merged_at
+                .is_some_and(|at| at.elapsed().as_secs_f32() < MERGE_SECS)
             || self.history.iter().any(expiring)
             || self.preview.is_some()
     }
@@ -231,6 +240,9 @@ impl Default for SharedState {
             was_held: false,
             held_parts: 0,
             shifted_at: None,
+            rushed: false,
+            newest: None,
+            merged_at: None,
             slot_grew: None,
             key_display_mode: crate::config::KeyDisplayMode::default(),
             icon_style: IconStyle::default(),
@@ -448,6 +460,10 @@ impl Snapshot {
         let new_press = held && (!s.was_held || row_len > s.row_len);
         let arrived = !held && !s.was_held && row_len > s.row_len;
         if new_press || arrived {
+            // Arriving while the last one is still sliding in
+            s.rushed = s
+                .shifted_at
+                .is_some_and(|at| at.elapsed().as_secs_f32() < crate::keystroke::SLIDE_SECS);
             s.shifted_at = Some(now);
             // A fresh keystroke appears as it is, without growing
             s.slot_grew = None;
@@ -455,6 +471,22 @@ impl Snapshot {
             // The held combination gained a key (Ctrl, then Ctrl + Shift…)
             s.slot_grew = Some((now, s.held_parts));
         }
+        // The same key pressed again counts up on the newest keystroke instead of
+        // adding one; its copy glides onto it
+        let newest = keystrokes
+            .iter()
+            .rfind(|k| !k.is_expired(fade_duration))
+            .map(|k| (k.keys.clone(), k.count));
+        match (&newest, &s.newest) {
+            (Some((keys, count)), Some((was_keys, was_count)))
+                if !(new_press || arrived) && keys == was_keys && count > was_count =>
+            {
+                s.merged_at = Some(now);
+            }
+            _ if new_press || arrived => s.merged_at = None,
+            _ => {}
+        }
+        s.newest = newest;
         s.row_len = row_len;
         s.was_held = held;
         s.held_parts = held_parts;
@@ -479,6 +511,8 @@ impl Snapshot {
             showing: s.enabled || s.arranging || s.preview.is_some(),
             motion: crate::keystroke::Motion {
                 shifted_at: s.shifted_at,
+                rushed: s.rushed,
+                merged_at: s.merged_at,
                 slot_grew: s.slot_grew,
             },
         }
@@ -506,7 +540,7 @@ fn live_keystrokes(s: &SharedState) -> (Vec<Keystroke>, bool) {
         } else {
             Keystroke::single(display_str, true)
         };
-        display.push(mouse_keystroke);
+        push_or_count_up(&mut display, mouse_keystroke);
     } else if let Some((ref key, ref key_mods)) = s.current_key {
         // Key + modifiers pressed (use modifiers from when key was pressed)
         let current = if key_mods.any() {
@@ -514,15 +548,7 @@ fn live_keystrokes(s: &SharedState) -> (Vec<Keystroke>, bool) {
         } else {
             Keystroke::single(key.clone(), true)
         };
-        // Pressing the same key again quickly counts up on the last keystroke (it
-        // merges on release) instead of adding another
-        match display.last_mut() {
-            Some(last) if last.can_merge(&current) => {
-                last.pressed = true;
-                last.count += 1;
-            }
-            _ => display.push(current),
-        }
+        push_or_count_up(&mut display, current);
     } else if s.modifiers.any() && !s.key_pressed_with_modifiers {
         // Only modifiers pressed (no key, no mouse). Once a key was pressed with
         // them, the finished combination stays in the slot instead.
@@ -591,6 +617,18 @@ impl Preview {
     fn is_over(&self, fade_duration: f32) -> bool {
         let last = PREVIEW_SCRIPT.last().map_or(0, |(at, ..)| *at);
         self.started.elapsed().as_secs_f32() > last as f32 / 1000.0 + fade_duration
+    }
+}
+
+/// Show a held keystroke: pressing the same key or button again soon counts up on
+/// the last keystroke (it merges there on release) instead of adding another
+fn push_or_count_up(display: &mut Vec<Keystroke>, held: Keystroke) {
+    match display.last_mut() {
+        Some(last) if last.can_merge(&held) => {
+            last.pressed = true;
+            last.count += 1;
+        }
+        _ => display.push(held),
     }
 }
 
@@ -1095,6 +1133,23 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(released_modifiers(&peak, &only_alt), 0b1011);
+    }
+
+    #[test]
+    fn a_repeat_glides_onto_the_last_keystroke_without_moving_the_row() {
+        let mut state = SharedState::default();
+        state.history.push(Keystroke::single("x", false));
+        state.history.push(Keystroke::single("LClick", false));
+        Snapshot::take(&mut state, false);
+        state.shifted_at = None;
+
+        // Clicking again soon: no new keystroke, the last one counts up
+        state.current_mouse = Some(("LClick".into(), std::time::Instant::now(), false));
+        let frame = Snapshot::take(&mut state, false);
+        assert_eq!(frame.keystrokes.len(), 2);
+        assert_eq!(frame.keystrokes[1].count, 2);
+        assert!(state.merged_at.is_some());
+        assert!(state.shifted_at.is_none());
     }
 
     #[test]
