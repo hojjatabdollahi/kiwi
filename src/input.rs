@@ -482,7 +482,7 @@ fn process_input_event(
             state: btn_state,
         } => {
             if let Ok(mut s) = state.lock() {
-                if !s.enabled || !s.show_mouse {
+                if !s.enabled || !s.show_tablet {
                     return;
                 }
                 button_event(&mut s, &label, btn_state);

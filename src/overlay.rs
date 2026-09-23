@@ -69,6 +69,8 @@ pub struct SharedState {
     pub line_width: Option<f32>,
     /// Arrange mode: the overlay takes input and shows sample keys, snap spots and a toolbar
     pub arranging: bool,
+    /// A theme preview playing on the overlay
+    pub preview: Option<Preview>,
     /// Key display mode (typed character vs physical key)
     pub key_display_mode: crate::config::KeyDisplayMode,
     /// Icon style (symbols vs text)
@@ -83,6 +85,8 @@ pub struct SharedState {
     pub show_gestures: bool,
     /// Show touchscreen contacts
     pub show_touch: bool,
+    /// Show drawing tablet input
+    pub show_tablet: bool,
     /// Live touchscreen contacts (plus the ones currently fading out)
     pub touches: Vec<TouchPoint>,
     /// Current modifier state (live)
@@ -121,11 +125,19 @@ impl SharedState {
         self.show_mouse = config.show_mouse;
         self.show_gestures = config.show_gestures;
         self.show_touch = config.show_touch;
+        self.show_tablet = config.show_tablet;
     }
 
     /// Clean up expired keystrokes
     pub fn cleanup_expired(&mut self) {
         let fade_duration = self.fade_duration;
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|p| p.is_over(fade_duration))
+        {
+            self.preview = None;
+        }
         self.history.retain(|k| !k.is_expired(fade_duration));
         self.touches.retain(|t| !t.is_expired());
     }
@@ -182,6 +194,7 @@ impl Default for SharedState {
             margin: 20.0,
             line_width: None,
             arranging: false,
+            preview: None,
             key_display_mode: crate::config::KeyDisplayMode::default(),
             icon_style: IconStyle::default(),
             history_count: 5,
@@ -189,6 +202,7 @@ impl Default for SharedState {
             show_mouse: true,
             show_gestures: true,
             show_touch: true,
+            show_tablet: true,
             touches: Vec::new(),
             modifiers: KeyModifiers::default(),
             peak_modifiers: KeyModifiers::default(),
@@ -360,8 +374,14 @@ struct Snapshot {
 
 impl Snapshot {
     fn take(s: &SharedState, show_touches: bool) -> Self {
+        let theme = match &s.preview {
+            Some(preview) if !s.arranging => preview.theme.clone(),
+            _ => s.theme.clone(),
+        };
         let keystrokes = if s.arranging {
             sample_keystrokes(s.theme.layout)
+        } else if let Some(preview) = &s.preview {
+            preview.keystrokes()
         } else if s.enabled {
             live_keystrokes(s)
         } else {
@@ -376,7 +396,7 @@ impl Snapshot {
             keystrokes,
             key_size: s.key_size,
             fade_duration: s.fade_duration,
-            theme: s.theme.clone(),
+            theme,
             position: s.position,
             margin: s.margin,
             line_width: s.line_width,
@@ -423,6 +443,61 @@ fn live_keystrokes(s: &SharedState) -> Vec<Keystroke> {
         }
     }
     display
+}
+
+/// A theme preview: a short scripted bit of typing played on the overlay
+#[derive(Debug)]
+pub struct Preview {
+    pub theme: Arc<Theme>,
+    pub started: std::time::Instant,
+}
+
+/// The preview script: when each keystroke happens (ms from the start) and its keys
+const PREVIEW_SCRIPT: &[(u64, &[&str], u32)] = &[
+    (0, &["⇧", "H"], 1),
+    (160, &["i"], 1),
+    (320, &["␣"], 1),
+    (480, &["⇧", "K"], 1),
+    (640, &["i"], 1),
+    (800, &["w"], 1),
+    (960, &["i"], 1),
+    (1500, &["Ctrl", "C"], 1),
+    (2100, &["LClick"], 1),
+    (2700, &["⌫"], 3),
+    (3300, &["↵"], 1),
+];
+
+/// How long a key looks pressed in the preview
+const PREVIEW_PRESS_MS: u64 = 120;
+
+impl Preview {
+    pub fn new(theme: Arc<Theme>) -> Self {
+        Self {
+            theme,
+            started: std::time::Instant::now(),
+        }
+    }
+
+    /// The keystrokes played so far, timestamped so they fade like real ones
+    fn keystrokes(&self) -> Vec<Keystroke> {
+        let elapsed = self.started.elapsed().as_millis() as u64;
+        PREVIEW_SCRIPT
+            .iter()
+            .filter(|(at, ..)| *at <= elapsed)
+            .map(|(at, keys, count)| Keystroke {
+                keys: keys.iter().map(|k| k.to_string()).collect(),
+                pressed: elapsed - at < PREVIEW_PRESS_MS,
+                timestamp: self.started + std::time::Duration::from_millis(*at),
+                count: *count,
+            })
+            .collect()
+    }
+
+    /// Done once the last keystroke has faded out
+    fn is_over(&self, fade_duration: f32) -> bool {
+        let last = PREVIEW_SCRIPT.last().map_or(0, |(at, ..)| *at);
+        self.started.elapsed().as_secs_f32() > last as f32 / 1000.0 + fade_duration
+    }
 }
 
 /// What arrange mode shows in place of real input

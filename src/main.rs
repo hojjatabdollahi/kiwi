@@ -57,7 +57,7 @@ fn main() -> cosmic::iced::Result {
                 .min_width(350.0)
                 .min_height(400.0),
         )
-        .size(Size::new(400.0, 550.0))
+        .size(Size::new(440.0, 640.0))
         .exit_on_close(false); // Don't exit when window closes - tray stays
 
     cosmic::app::run::<KiwiApp>(settings, Flags { tray_tx, tray_rx })
@@ -98,6 +98,9 @@ struct KiwiApp {
     arranging: Option<Arranging>,
     /// The theme being edited in the Customize drawer
     draft: Option<customize::Draft>,
+    /// Segmented buttons in the settings window
+    display_mode_model: widget::segmented_button::SingleSelectModel,
+    icon_style_model: widget::segmented_button::SingleSelectModel,
 }
 
 /// An arrange-on-screen session
@@ -127,6 +130,7 @@ pub enum Message {
     ToggleActive(bool),
     SetFadeDuration(f32),
     SelectTheme(ThemeChoice),
+    PreviewTheme(ThemeChoice),
     OpenThemesFolder,
     ImportTheme,
     ImportThemeFrom(std::path::PathBuf),
@@ -135,8 +139,8 @@ pub enum Message {
     ThemeMessage(String),
     Customize(customize::CustomizeMessage),
     SetPosition(OverlayPosition),
-    SetKeyDisplayMode(config::KeyDisplayMode),
-    SetIconStyle(config::IconStyle),
+    DisplayModeTab(widget::segmented_button::Entity),
+    IconStyleTab(widget::segmented_button::Entity),
     // Arrange mode
     StartArranging,
     FinishArranging,
@@ -149,6 +153,7 @@ pub enum Message {
     SetShowMouse(bool),
     SetShowGestures(bool),
     SetShowTouch(bool),
+    SetShowTablet(bool),
     SaveConfig,
     ConfigChanged(Config),
     CosmicCompConfigChanged(cosmic_xkb::CosmicCompConfig),
@@ -227,7 +232,6 @@ impl cosmic::Application for KiwiApp {
 
         let app = Self {
             core,
-            config,
             config_handler,
             pending_save: false,
             tray_rx: flags.tray_rx,
@@ -241,6 +245,12 @@ impl cosmic::Application for KiwiApp {
             theme_message: None,
             arranging: None,
             draft: None,
+            display_mode_model: settings::segmented_model(
+                settings::DISPLAY_MODES,
+                config.key_display_mode,
+            ),
+            icon_style_model: settings::segmented_model(settings::ICON_STYLES, config.icon_style),
+            config,
         };
 
         // Load bundled font
@@ -259,11 +269,18 @@ impl cosmic::Application for KiwiApp {
     }
 
     fn header_center(&self) -> Vec<Element<'_, Self::Message>> {
-        vec![widget::text::title3("Kiwi Settings").into()]
+        vec![widget::text::title3("Kiwi").into()]
     }
 
     fn header_end(&self) -> Vec<Element<'_, Self::Message>> {
         vec![
+            // The master switch, the same one the tray toggles
+            widget::tooltip(
+                widget::toggler(self.config.enabled).on_toggle(Message::ToggleActive),
+                "Show keystrokes",
+                widget::tooltip::Position::Bottom,
+            )
+            .into(),
             widget::button::icon(widget::icon::from_name("help-about-symbolic"))
                 .on_press(Message::ToggleContextPage(ContextPage::About))
                 .into(),
@@ -322,22 +339,7 @@ impl cosmic::Application for KiwiApp {
 
     fn view(&self) -> Element<'_, Self::Message> {
         // This is for the settings window (main window when open)
-        settings::settings_view(
-            self.config.fade_duration,
-            &self.themes,
-            &ThemeChoice::from_config(&self.config),
-            &self.current_theme_name(),
-            self.theme_message.as_deref(),
-            self.config.position,
-            self.config.margin,
-            self.config.key_display_mode,
-            self.config.icon_style,
-            self.config.enabled,
-            self.config.show_keyboard,
-            self.config.show_mouse,
-            self.config.show_gestures,
-            self.config.show_touch,
-        )
+        settings::settings_view(self)
     }
 
     fn view_window(&self, id: window::Id) -> Element<'_, Self::Message> {
@@ -346,22 +348,7 @@ impl cosmic::Application for KiwiApp {
             view_overlay(&self.shared_state, self.is_touch_surface(id))
         } else {
             // Settings window
-            settings::settings_view(
-                self.config.fade_duration,
-                &self.themes,
-                &ThemeChoice::from_config(&self.config),
-                &self.current_theme_name(),
-                self.theme_message.as_deref(),
-                self.config.position,
-                self.config.margin,
-                self.config.key_display_mode,
-                self.config.icon_style,
-                self.config.enabled,
-                self.config.show_keyboard,
-                self.config.show_mouse,
-                self.config.show_gestures,
-                self.config.show_touch,
-            )
+            settings::settings_view(self)
         }
     }
 
@@ -462,7 +449,7 @@ impl cosmic::Application for KiwiApp {
                 // No window exists, open a new one
                 self.reload_themes();
                 let settings = window::Settings {
-                    size: Size::new(400.0, 550.0),
+                    size: Size::new(440.0, 640.0),
                     decorations: false, // libcosmic provides its own header bar
                     ..Default::default()
                 };
@@ -517,6 +504,17 @@ impl cosmic::Application for KiwiApp {
                 }
             }
             Message::SelectTheme(choice) => self.select_theme(choice),
+            Message::PreviewTheme(choice) => {
+                let theme = self
+                    .themes
+                    .iter()
+                    .find(|(c, _)| *c == choice)
+                    .map(|(_, theme)| theme.clone())
+                    .unwrap_or_else(|| Arc::new(choice.load(&theme::themes_dir())));
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.preview = Some(overlay::Preview::new(theme));
+                }
+            }
             Message::OpenThemesFolder => {
                 let dir = theme::themes_dir();
                 if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -654,7 +652,14 @@ impl cosmic::Application for KiwiApp {
                 }
                 self.apply_arrangement();
             }
-            Message::SetKeyDisplayMode(mode) => {
+            Message::DisplayModeTab(entity) => {
+                self.display_mode_model.activate(entity);
+                let Some(&mode) = self
+                    .display_mode_model
+                    .data::<config::KeyDisplayMode>(entity)
+                else {
+                    return Task::none();
+                };
                 self.config.key_display_mode = mode;
                 self.save_config();
 
@@ -663,7 +668,11 @@ impl cosmic::Application for KiwiApp {
                     state.key_display_mode = mode;
                 }
             }
-            Message::SetIconStyle(style) => {
+            Message::IconStyleTab(entity) => {
+                self.icon_style_model.activate(entity);
+                let Some(&style) = self.icon_style_model.data::<config::IconStyle>(entity) else {
+                    return Task::none();
+                };
                 self.config.icon_style = style;
                 self.save_config();
 
@@ -707,6 +716,14 @@ impl cosmic::Application for KiwiApp {
                     }
                 }
             }
+            Message::SetShowTablet(show) => {
+                self.config.show_tablet = show;
+                self.save_config();
+
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.show_tablet = show;
+                }
+            }
             Message::SaveConfig => {
                 if self.pending_save {
                     self.pending_save = false;
@@ -717,6 +734,8 @@ impl cosmic::Application for KiwiApp {
                 log::info!("Config changed externally: enabled={}", config.enabled);
                 self.config = config.clone();
                 self.update_tray_state();
+                settings::select_segment(&mut self.display_mode_model, config.key_display_mode);
+                settings::select_segment(&mut self.icon_style_model, config.icon_style);
 
                 // Update shared state - layout positioning is handled in view
                 if let Ok(mut state) = self.shared_state.lock() {

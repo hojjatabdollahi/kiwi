@@ -80,7 +80,8 @@ pub enum Fill {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Stroke {
-    pub color: Hex,
+    /// One color, or two for a gradient (written as a plain "#hex" string when solid)
+    pub color: Fill,
     pub width: f32,
 }
 
@@ -185,7 +186,7 @@ impl Theme {
         let keys = Self::keys(builtin);
         let clear = Fill::Solid(Hex(Color::TRANSPARENT));
         let no_border = Stroke {
-            color: Hex(Color::TRANSPARENT),
+            color: clear,
             width: 0.0,
         };
 
@@ -262,7 +263,10 @@ impl Theme {
     fn keys(builtin: BuiltinTheme) -> KeyStyle {
         let rgb = |r, g, b| Hex(Color::from_rgb(r, g, b));
         let rgba = |r, g, b, a| Hex(Color::from_rgba(r, g, b, a));
-        let stroke = |color| Stroke { color, width: 1.0 };
+        let stroke = |color| Stroke {
+            color: Fill::Solid(color),
+            width: 1.0,
+        };
 
         match builtin {
             // Classic dark with a subtle blue pressed state
@@ -680,6 +684,18 @@ mod tests {
         );
         assert_eq!(theme.key.gap, 0.0);
         assert_eq!(theme.key.radius, Theme::default().key.radius);
+
+        // Borders written as one color (the only kind before gradients) still load
+        let old: Theme =
+            ron::from_str(r##"(key: (border: (color: "#ffffff33", width: 2.0)))"##).unwrap();
+        assert_eq!(
+            old.key.border.color,
+            Fill::Solid(Hex::parse("#ffffff33").unwrap())
+        );
+        let gradient: Theme =
+            ron::from_str(r##"(key: (border: (color: ("#ff0000", "#0000ff"), width: 2.0)))"##)
+                .unwrap();
+        assert!(matches!(gradient.key.border.color, Fill::Gradient(..)));
 
         let empty: Theme = ron::from_str("()").unwrap();
         assert_eq!(empty, Theme::default());

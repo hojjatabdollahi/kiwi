@@ -164,6 +164,8 @@ pub struct Config {
     pub show_gestures: bool,
     /// Show touchscreen contacts (a marker wherever a finger touches)
     pub show_touch: bool,
+    /// Show drawing tablet input (pen taps, eraser, pen and pad buttons)
+    pub show_tablet: bool,
 }
 
 impl Default for Config {
@@ -184,6 +186,7 @@ impl Default for Config {
             show_mouse: true,
             show_gestures: true,
             show_touch: true,
+            show_tablet: true,
         }
     }
 }

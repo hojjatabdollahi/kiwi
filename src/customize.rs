@@ -31,9 +31,12 @@ pub enum ColorField {
 }
 
 impl ColorField {
-    /// Only backgrounds can be gradients
+    /// Backgrounds and borders can be gradients
     fn allows_gradient(self) -> bool {
-        matches!(self, Self::KeyBackground | Self::RailBackground)
+        matches!(
+            self,
+            Self::KeyBackground | Self::KeyBorder | Self::RailBackground | Self::RailBorder
+        )
     }
 
     fn get(self, theme: &Theme) -> Option<Fill> {
@@ -42,9 +45,9 @@ impl ColorField {
             Self::KeyBackground => Some(theme.key.background),
             Self::KeyPressed => Some(Fill::Solid(theme.key.pressed)),
             Self::KeyText => Some(Fill::Solid(theme.key.text)),
-            Self::KeyBorder => Some(Fill::Solid(theme.key.border.color)),
+            Self::KeyBorder => Some(theme.key.border.color),
             Self::RailBackground => rail.map(|r| r.background),
-            Self::RailBorder => rail.map(|r| Fill::Solid(r.border.color)),
+            Self::RailBorder => rail.map(|r| r.border.color),
             Self::RailDivider => rail.and_then(|r| r.divider).map(Fill::Solid),
         }
     }
@@ -77,6 +80,11 @@ impl ColorField {
         };
         match (self, value) {
             (Self::KeyBackground, Some(fill)) => theme.key.background = fill,
+            (Self::KeyBorder, Some(fill)) => theme.key.border.color = fill,
+            (Self::RailBorder, Some(fill)) => match &mut theme.rail {
+                Some(rail) => rail.border.color = fill,
+                None => return false,
+            },
             (Self::RailBackground, Some(fill)) => match &mut theme.rail {
                 Some(rail) => rail.background = fill,
                 None => return false,
@@ -93,11 +101,6 @@ impl ColorField {
                 match field {
                     Self::KeyPressed => theme.key.pressed = color,
                     Self::KeyText => theme.key.text = color,
-                    Self::KeyBorder => theme.key.border.color = color,
-                    Self::RailBorder => match &mut theme.rail {
-                        Some(rail) => rail.border.color = color,
-                        None => return false,
-                    },
                     _ => return false,
                 }
             }
@@ -239,6 +242,15 @@ struct Picking {
     hex: String,
     /// The field before picking started, for Cancel
     before: Option<Fill>,
+}
+
+/// The last few folders of a path, short enough to sit next to a button
+fn short_path(path: &std::path::Path) -> String {
+    let parts: Vec<_> = path.iter().map(|p| p.to_string_lossy()).collect();
+    match parts.len() {
+        0..=3 => path.display().to_string(),
+        n => format!("…/{}", parts[n - 3..].join("/")),
+    }
 }
 
 /// A new divider starts as a faint white line
@@ -645,15 +657,19 @@ pub fn view<'a>(
     let missing = draft.missing_icons();
     let folder = draft
         .icons_dir
-        .as_ref()
-        .map(|dir| dir.display().to_string())
-        .unwrap_or_else(|| "No icon folder".to_string());
+        .as_deref()
+        .map(short_path)
+        .unwrap_or_else(|| "None, using Kiwi's icons".to_string());
     let mut icons = settings::section()
         .title("Icons")
-        .add(settings::item(
-            folder,
-            widget::button::standard("Choose…").on_press(send(CustomizeMessage::ChooseIcons)),
-        ))
+        .add(
+            settings::item::builder("Icon folder")
+                .description(folder)
+                .control(
+                    widget::button::standard("Choose…")
+                        .on_press(send(CustomizeMessage::ChooseIcons)),
+                ),
+        )
         .add(
             settings::item::builder(format!(
                 "{} of {} icons found",

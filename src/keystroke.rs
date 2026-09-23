@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use crate::config::{IconStyle, OverlayPosition};
-use crate::theme::{Fill, Layout, RailStyle, Repeats, Theme};
+use crate::theme::{self, Fill, Layout, RailStyle, Repeats, Theme};
 
 // Bundled font for keystroke text
 const FONT_BYTES: &[u8] = include_bytes!("../data/GemunuLibre-VariableFont_wght.ttf");
@@ -657,11 +657,6 @@ fn keystroke_widget<'a, M: 'a>(
     };
     let background = fill_background(fill, opacity);
 
-    let border = Border {
-        color: fade(style.border.color.0),
-        width: style.border.width,
-        radius: style.radius.into(),
-    };
     let text_color = fade(style.text.0);
     let plus_color = fade(style.separator.0);
 
@@ -717,20 +712,18 @@ fn keystroke_widget<'a, M: 'a>(
         );
     }
 
-    let key_widget: Element<'a, M> = widget::container(
-        widget::row::with_children(parts)
-            .spacing(0)
-            .align_y(iced::Alignment::Center),
-    )
-    .height(Length::Fixed(key_size))
-    .class(cosmic::theme::Container::custom(move |_| {
-        container::Style {
-            background: Some(background),
-            border,
-            ..Default::default()
-        }
-    }))
-    .into();
+    let key_widget = with_border(
+        widget::container(
+            widget::row::with_children(parts)
+                .spacing(0)
+                .align_y(iced::Alignment::Center),
+        )
+        .height(Length::Fixed(key_size)),
+        background,
+        style.border,
+        style.radius,
+        opacity,
+    );
 
     match style.repeats {
         // Always reserve space for the badge to prevent relayout
@@ -896,25 +889,111 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
 
 /// Put `content` on the theme's rail, faded to `opacity`
 fn on_rail<'a, M: 'a>(content: Element<'a, M>, rail: &RailStyle, opacity: f32) -> Element<'a, M> {
-    let background = fill_background(rail.background, opacity);
-    let border = Border {
-        color: Color {
-            a: rail.border.color.0.a * opacity,
-            ..rail.border.color.0
-        },
-        width: rail.border.width,
-        radius: rail.radius.into(),
+    with_border(
+        widget::container(content).padding(rail.padding),
+        fill_background(rail.background, opacity),
+        rail.border,
+        rail.radius,
+        opacity,
+    )
+}
+
+/// Give a container a background and the theme's border. A solid border is the
+/// container's own; a gradient border, which iced containers can't draw, is
+/// stroked on a canvas laid over the container.
+fn with_border<'a, M: 'a>(
+    container: widget::Container<'a, M, cosmic::Theme>,
+    background: Background,
+    border: theme::Stroke,
+    radius: f32,
+    opacity: f32,
+) -> Element<'a, M> {
+    let fade = |color: Color| Color {
+        a: color.a * opacity,
+        ..color
     };
-    widget::container(content)
-        .padding(rail.padding)
-        .class(cosmic::theme::Container::custom(move |_| {
-            container::Style {
-                background: Some(background),
-                border,
+    let (solid, gradient) = match border.color {
+        Fill::Solid(color) => (fade(color.0), None),
+        Fill::Gradient(start, end) => (Color::TRANSPARENT, Some((fade(start.0), fade(end.0)))),
+    };
+    let container = container.class(cosmic::theme::Container::custom(move |_| {
+        container::Style {
+            background: Some(background),
+            border: Border {
+                color: solid,
+                width: if gradient.is_some() {
+                    0.0
+                } else {
+                    border.width
+                },
+                radius: radius.into(),
+            },
+            ..Default::default()
+        }
+    }));
+    match gradient {
+        None => container.into(),
+        Some((start, end)) => cosmic::iced::widget::stack![
+            container,
+            widget::Canvas::new(GradientBorder {
+                start,
+                end,
+                width: border.width,
+                radius,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill),
+        ]
+        .into(),
+    }
+}
+
+/// A rounded outline drawn with a 45° gradient
+struct GradientBorder {
+    start: Color,
+    end: Color,
+    width: f32,
+    radius: f32,
+}
+
+impl<M> widget::canvas::Program<M, cosmic::Theme> for GradientBorder {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &cosmic::Renderer,
+        _theme: &cosmic::Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<widget::canvas::Geometry> {
+        use widget::canvas::{gradient::Linear, Frame, Gradient, Path, Style};
+
+        let mut frame = Frame::new(renderer, bounds.size());
+        if self.width <= 0.0 {
+            return vec![frame.into_geometry()];
+        }
+        // Keep the whole line inside the bounds
+        let inset = self.width / 2.0;
+        let size = iced::Size::new(bounds.width - self.width, bounds.height - self.width);
+        let radius = (self.radius - inset).clamp(0.0, size.width.min(size.height) / 2.0);
+        let outline = Path::rounded_rectangle(iced::Point::new(inset, inset), size, radius.into());
+        let gradient = Linear::new(
+            iced::Point::ORIGIN,
+            iced::Point::new(bounds.width, bounds.height),
+        )
+        .add_stop(0.0, self.start)
+        .add_stop(1.0, self.end);
+        frame.stroke(
+            &outline,
+            widget::canvas::Stroke {
+                style: Style::Gradient(Gradient::Linear(gradient)),
+                width: self.width,
                 ..Default::default()
-            }
-        }))
-        .into()
+            },
+        );
+        vec![frame.into_geometry()]
+    }
 }
 
 /// One piece of the typewriter line

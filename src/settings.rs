@@ -1,18 +1,14 @@
 //! Settings window view and related logic
 
-use cosmic::iced::{Color, Length};
+use cosmic::iced::{Alignment, Color, Length};
 use cosmic::prelude::*;
-use cosmic::widget;
-use cosmic::widget::scrollable;
-use cosmic::widget::svg;
-use cosmic::widget::Svg;
-
-use std::sync::Arc;
+use cosmic::widget::{self, scrollable, segmented_button, settings, svg, Svg};
 
 use crate::config::{IconStyle, KeyDisplayMode, OverlayPosition, APP_VERSION};
+use crate::customize::CustomizeMessage;
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke};
 use crate::theme::{Layout, Theme, ThemeChoice};
-use crate::Message;
+use crate::{KiwiApp, Message};
 
 // Checkerboard pattern SVG for transparency preview
 // (wide, with small squares, so it can cover a card without the squares growing)
@@ -26,49 +22,82 @@ const CHECKERBOARD_SVG: &[u8] =
   <rect width=\"320\" height=\"80\" fill=\"url(#c)\"/>\
 </svg>";
 
-/// Renders the settings view for the application
-pub fn settings_view(
-    fade_duration: f32,
-    themes: &[(ThemeChoice, Arc<Theme>)],
-    current_theme: &ThemeChoice,
-    // The current theme's name, marked when it has unsaved edits
-    current_name: &str,
-    theme_message: Option<&str>,
-    position: OverlayPosition,
-    margin: f32,
-    key_display_mode: KeyDisplayMode,
-    icon_style: IconStyle,
-    is_active: bool,
-    show_keyboard: bool,
-    show_mouse: bool,
-    show_gestures: bool,
-    show_touch: bool,
-) -> Element<'static, Message> {
-    // Theme gallery: two cards per row, each drawn with its own theme
-    let mut theme_grid = widget::Column::new().spacing(8);
-    for pair in themes.chunks(2) {
-        let mut row = widget::Row::new().spacing(8);
-        for (choice, theme) in pair {
-            let selected = choice == current_theme;
+const TOUCHSCREEN_ICON: &[u8] = include_bytes!("../data/icons/kiwi-tap.svg");
+
+/// Height of a theme card's sample area
+const CARD_PREVIEW_HEIGHT: f32 = 64.0;
+
+/// A segmented button model offering `options`, with `current` selected
+pub fn segmented_model<T: Copy + PartialEq + 'static>(
+    options: &[(&'static str, T)],
+    current: T,
+) -> segmented_button::SingleSelectModel {
+    let mut model = segmented_button::SingleSelectModel::default();
+    for (label, value) in options {
+        let entity = model.insert().text(*label).data(*value).id();
+        if *value == current {
+            model.activate(entity);
+        }
+    }
+    model
+}
+
+/// Select the option holding `value`, e.g. after the config changed elsewhere
+pub fn select_segment<T: PartialEq + 'static>(
+    model: &mut segmented_button::SingleSelectModel,
+    value: T,
+) {
+    let found = model.iter().find(|e| model.data::<T>(*e) == Some(&value));
+    if let Some(entity) = found {
+        model.activate(entity);
+    }
+}
+
+pub const DISPLAY_MODES: &[(&str, KeyDisplayMode)] = &[
+    ("Character @", KeyDisplayMode::TypedCharacter),
+    ("Key 2", KeyDisplayMode::PhysicalKey),
+];
+
+pub const ICON_STYLES: &[(&str, IconStyle)] =
+    &[("Icons", IconStyle::Symbol), ("Names", IconStyle::Text)];
+
+/// Renders the settings window
+pub fn settings_view(app: &KiwiApp) -> Element<'_, Message> {
+    let config = &app.config;
+    let current = ThemeChoice::from_config(config);
+    let current_name = app.current_theme_name();
+
+    // Theme gallery: two cards per row, each drawn with its own theme, then the import card
+    let mut cards: Vec<Element<'_, Message>> = app
+        .themes
+        .iter()
+        .map(|(choice, theme)| {
+            let selected = *choice == current;
             let name = if selected {
-                current_name
+                current_name.clone()
             } else {
-                choice.name()
+                choice.name().to_string()
             };
-            row = row.push(theme_card(choice, name, theme, selected, icon_style));
-        }
-        if pair.len() == 1 {
-            row = row.push(widget::Space::new().width(Length::Fill));
-        }
-        theme_grid = theme_grid.push(row);
+            theme_card(choice, name, theme, selected, config.icon_style)
+        })
+        .collect();
+    cards.push(import_card());
+
+    let mut theme_grid = widget::Column::new().spacing(8);
+    let mut cards = cards.into_iter();
+    while let Some(first) = cards.next() {
+        let second = cards
+            .next()
+            .unwrap_or_else(|| widget::Space::new().width(Length::Fill).into());
+        theme_grid = theme_grid.push(widget::Row::new().spacing(8).push(first).push(second));
     }
 
     let mut theme_section = widget::Column::new()
         .spacing(8)
         .push(
             widget::Row::new()
-                .align_y(cosmic::iced::Alignment::Center)
-                .push(widget::text::body("Theme"))
+                .align_y(Alignment::Center)
+                .push(widget::text::heading("Theme"))
                 .push(widget::Space::new().width(Length::Fill))
                 .push(
                     widget::button::link("Open themes folder").on_press(Message::OpenThemesFolder),
@@ -77,162 +106,108 @@ pub fn settings_view(
         .push(theme_grid)
         .push(
             widget::Row::new()
-                .spacing(8)
-                .push(
-                    widget::button::standard("Customize…")
-                        .on_press(Message::Customize(crate::customize::CustomizeMessage::Open)),
-                )
                 .push(widget::Space::new().width(Length::Fill))
-                .push(widget::button::standard("Import…").on_press(Message::ImportTheme))
-                .push(widget::button::standard("Export…").on_press(Message::ExportTheme)),
+                .push(
+                    widget::button::standard(format!("Customize {current_name}"))
+                        .on_press(Message::Customize(CustomizeMessage::Open)),
+                ),
         );
-    if let Some(message) = theme_message {
-        theme_section = theme_section.push(widget::text::caption(message.to_string()));
+    if let Some(message) = &app.theme_message {
+        theme_section = theme_section.push(widget::text::caption(message.as_str()));
     }
 
-    // Key Display Mode radio buttons
-    let display_mode_section = widget::Column::new()
-        .spacing(4)
-        .push(widget::text::body("Key Display Mode"))
-        .push(
-            widget::Row::new()
-                .spacing(15)
-                .push(widget::radio(
-                    KeyDisplayMode::TypedCharacter.name(),
-                    KeyDisplayMode::TypedCharacter,
-                    Some(key_display_mode),
-                    Message::SetKeyDisplayMode,
-                ))
-                .push(widget::radio(
-                    KeyDisplayMode::PhysicalKey.name(),
-                    KeyDisplayMode::PhysicalKey,
-                    Some(key_display_mode),
-                    Message::SetKeyDisplayMode,
-                )),
-        )
-        .push(
-            widget::text::caption(format!("Example: {}", key_display_mode.example())).class(
-                cosmic::theme::Text::Color(Color::from_rgba(0.6, 0.6, 0.6, 1.0)),
+    let placement = settings::section().title("Placement").add(
+        settings::item::builder(config.position.name())
+            .description(format!("{:.0} px from the edge", config.margin))
+            .control(
+                widget::button::suggested("Arrange on screen").on_press(Message::StartArranging),
             ),
-        );
+    );
 
-    // Icon Style radio buttons
-    let icon_style_section = widget::Column::new()
-        .spacing(4)
-        .push(widget::text::body("Icon Style"))
-        .push(
+    let behavior = settings::section()
+        .title("Behavior")
+        .add(settings::item(
+            "Stay visible for",
             widget::Row::new()
-                .spacing(15)
-                .push(widget::radio(
-                    IconStyle::Symbol.name(),
-                    IconStyle::Symbol,
-                    Some(icon_style),
-                    Message::SetIconStyle,
-                ))
-                .push(widget::radio(
-                    IconStyle::Text.name(),
-                    IconStyle::Text,
-                    Some(icon_style),
-                    Message::SetIconStyle,
-                )),
-        );
-
-    // Input sources section
-    let input_sources_section = widget::Column::new()
-        .spacing(6)
-        .push(widget::text::body("Input Sources"))
-        .push(
-            widget::Row::new()
-                .spacing(10)
-                .align_y(cosmic::iced::Alignment::Center)
-                .push(widget::text::caption("Keyboard"))
-                .push(widget::Space::new().width(Length::Fill))
-                .push(widget::toggler(show_keyboard).on_toggle(Message::SetShowKeyboard)),
-        )
-        .push(
-            widget::Row::new()
-                .spacing(10)
-                .align_y(cosmic::iced::Alignment::Center)
-                .push(widget::text::caption("Mouse"))
-                .push(widget::Space::new().width(Length::Fill))
-                .push(widget::toggler(show_mouse).on_toggle(Message::SetShowMouse)),
-        )
-        .push(
-            widget::Row::new()
-                .spacing(10)
-                .align_y(cosmic::iced::Alignment::Center)
-                .push(widget::text::caption("Gestures"))
-                .push(widget::Space::new().width(Length::Fill))
-                .push(widget::toggler(show_gestures).on_toggle(Message::SetShowGestures)),
-        )
-        .push(
-            widget::Row::new()
-                .spacing(10)
-                .align_y(cosmic::iced::Alignment::Center)
-                .push(widget::text::caption("Touchscreen"))
-                .push(widget::Space::new().width(Length::Fill))
-                .push(widget::toggler(show_touch).on_toggle(Message::SetShowTouch)),
-        );
-
-    let content = widget::Column::new()
-        .padding(10)
-        .spacing(8)
-        .max_width(300.0)
-        // Active toggle at top
-        .push(
-            widget::Row::new()
-                .spacing(10)
-                .align_y(cosmic::iced::Alignment::Center)
-                .push(widget::text::body("Active"))
-                .push(widget::Space::new().width(Length::Fill))
-                .push(widget::toggler(is_active).on_toggle(Message::ToggleActive)),
-        )
-        // Separator
-        .push(widget::divider::horizontal::default())
-        // Key Display Mode section
-        .push(display_mode_section)
-        // Icon Style section
-        .push(icon_style_section)
-        // Separator
-        .push(widget::divider::horizontal::default())
-        // Input Sources section
-        .push(input_sources_section)
-        // Separator
-        .push(widget::divider::horizontal::default())
-        .push(theme_section)
-        // Separator
-        .push(widget::divider::horizontal::default())
-        // Fade slider
-        .push(
-            widget::Row::new()
-                .spacing(10)
-                .align_y(cosmic::iced::Alignment::Center)
-                .push(widget::text::body(format!("Fade: {:.1}s", fade_duration)))
+                .spacing(12)
+                .align_y(Alignment::Center)
                 .push(
-                    widget::slider(1.0..=10.0, fade_duration, Message::SetFadeDuration)
-                        .width(Length::Fill),
-                ),
-        )
-        .push(widget::divider::horizontal::default())
-        // Placement: size, position and length are set on screen
-        .push(widget::text::body("Placement"))
-        .push(
-            widget::Row::new()
-                .spacing(10)
-                .align_y(cosmic::iced::Alignment::Center)
-                .push(
-                    widget::text::caption(format!(
-                        "{}, {:.0} px from the edge",
-                        position.name(),
-                        margin
-                    ))
-                    .width(Length::Fill),
+                    widget::slider(1.0..=10.0, config.fade_duration, Message::SetFadeDuration)
+                        .width(Length::Fixed(150.0)),
                 )
                 .push(
-                    widget::button::suggested("Arrange on screen")
-                        .on_press(Message::StartArranging),
+                    widget::text::body(format!("{:.1} s", config.fade_duration))
+                        .width(Length::Fixed(44.0))
+                        .align_x(cosmic::iced::alignment::Horizontal::Right),
+                ),
+        ))
+        .add(settings::item(
+            "Shift+2 shows",
+            widget::segmented_control::horizontal(&app.display_mode_model)
+                .on_activate(Message::DisplayModeTab)
+                .width(Length::Shrink),
+        ))
+        .add(
+            settings::item::builder("Special keys")
+                .description("Only for keys the theme has no icon for")
+                .control(
+                    widget::segmented_control::horizontal(&app.icon_style_model)
+                        .on_activate(Message::IconStyleTab)
+                        .width(Length::Shrink),
                 ),
         );
+
+    let named_icon = |name: &'static str| widget::icon::from_name(name).size(20).icon();
+    let input_row =
+        |title: &'static str, icon: widget::Icon, on: bool, message: fn(bool) -> Message| {
+            settings::item::builder(title)
+                .icon(icon)
+                .toggler(on, message)
+        };
+    let inputs = settings::section()
+        .title("Show input from")
+        .add(input_row(
+            "Keyboard",
+            named_icon("input-keyboard-symbolic"),
+            config.show_keyboard,
+            Message::SetShowKeyboard,
+        ))
+        .add(
+            settings::item::builder("Mouse")
+                .description("Clicks and scrolling")
+                .icon(named_icon("input-mouse-symbolic"))
+                .toggler(config.show_mouse, Message::SetShowMouse),
+        )
+        .add(input_row(
+            "Touchpad gestures",
+            named_icon("input-touchpad-symbolic"),
+            config.show_gestures,
+            Message::SetShowGestures,
+        ))
+        .add(input_row(
+            "Touchscreen",
+            widget::icon::from_svg_bytes(TOUCHSCREEN_ICON)
+                .symbolic(true)
+                .icon()
+                .size(20),
+            config.show_touch,
+            Message::SetShowTouch,
+        ))
+        .add(input_row(
+            "Drawing tablet",
+            named_icon("input-tablet-symbolic"),
+            config.show_tablet,
+            Message::SetShowTablet,
+        ));
+
+    let content = widget::Column::new()
+        .padding([0, 16, 16, 16])
+        .spacing(24)
+        .max_width(520.0)
+        .push(theme_section)
+        .push(placement)
+        .push(behavior)
+        .push(inputs);
 
     // Version text (bottom right)
     let version_text = widget::text::caption(format!("v{}", APP_VERSION)).class(
@@ -265,10 +240,30 @@ pub fn settings_view(
         .into()
 }
 
-/// A clickable theme card showing a short sample drawn with that theme
+/// A theme card's frame: the image-button style, outlined in the accent color when selected
+fn card<'a>(
+    content: impl Into<Element<'a, Message>>,
+    selected: bool,
+) -> widget::Button<'a, Message> {
+    widget::button::custom(content)
+        .class(cosmic::theme::Button::Image)
+        .selected(selected)
+        .padding(4)
+        .width(Length::Fill)
+}
+
+/// Card text in the normal text color (the image-button style would make it the accent)
+fn card_label<'a>(
+    label: impl Into<std::borrow::Cow<'a, str>> + 'a,
+) -> widget::Text<'a, cosmic::Theme> {
+    let color = Color::from(cosmic::theme::active().cosmic().on_bg_color());
+    widget::text::body(label).class(cosmic::theme::Text::Color(color))
+}
+
+/// A clickable theme card showing a short sample drawn with that theme, and a preview button
 fn theme_card(
     choice: &ThemeChoice,
-    name: &str,
+    name: String,
     theme: &Theme,
     selected: bool,
     icon_style: IconStyle,
@@ -313,20 +308,47 @@ fn theme_card(
             .align_y(cosmic::iced::alignment::Vertical::Center),
     ])
     .width(Length::Fill)
-    .height(Length::Fixed(64.0))
+    .height(Length::Fixed(CARD_PREVIEW_HEIGHT))
     .clip(true);
 
-    let content = widget::Column::new()
-        .spacing(6)
-        .width(Length::Fill)
-        .push(preview)
-        .push(widget::text::body(name.to_string()));
+    let play = widget::tooltip(
+        widget::button::icon(widget::icon::from_name("media-playback-start-symbolic"))
+            .extra_small()
+            .on_press(Message::PreviewTheme(choice.clone())),
+        "Preview",
+        widget::tooltip::Position::Top,
+    );
+    let label = widget::Row::new()
+        .align_y(Alignment::Center)
+        .push(card_label(name).width(Length::Fill))
+        .push(play);
 
-    widget::button::custom(content)
-        .class(cosmic::theme::Button::Image)
-        .selected(selected)
-        .padding(4)
-        .width(Length::Fill)
-        .on_press(Message::SelectTheme(choice.clone()))
-        .into()
+    card(
+        widget::Column::new()
+            .spacing(4)
+            .width(Length::Fill)
+            .push(preview)
+            .push(label),
+        selected,
+    )
+    .on_press(Message::SelectTheme(choice.clone()))
+    .into()
+}
+
+/// The last card: import a theme from a zip file
+fn import_card() -> Element<'static, Message> {
+    let content = widget::container(
+        widget::Column::new()
+            .spacing(2)
+            .align_x(Alignment::Center)
+            .push(card_label("Import a theme…"))
+            .push(widget::text::caption(".zip file")),
+    )
+    .width(Length::Fill)
+    // Same height as a theme card: the sample area plus a label row
+    .height(Length::Fixed(CARD_PREVIEW_HEIGHT + 32.0))
+    .align_x(cosmic::iced::alignment::Horizontal::Center)
+    .align_y(cosmic::iced::alignment::Vertical::Center);
+
+    card(content, false).on_press(Message::ImportTheme).into()
 }
