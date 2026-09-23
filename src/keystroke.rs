@@ -969,6 +969,13 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
                 ..(*k).clone()
             };
             let copy_opacity = opacity * ((1.0 - merging) / 0.25).min(1.0);
+            // The copy starts just past the key, clear of an inline count on the
+            // key's right, so it glides over nothing but the key itself
+            let start = if edge_on_right {
+                key_width(&before, key_size, theme) / key_width(&copy, key_size, theme)
+            } else {
+                1.0
+            };
             cosmic::iced::widget::stack![
                 keystroke_widget(&before, key_size, opacity, theme, icon_style),
                 Reveal::new(
@@ -976,7 +983,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
                     1.0,
                     edge_on_right,
                 )
-                .nudge(1.0 - merging),
+                .nudge((1.0 - merging) * start),
             ]
             .into()
         } else {

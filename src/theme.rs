@@ -377,6 +377,8 @@ const MECHANICAL_ICONS: Svgs = svgs!("mechanical/icons":
 const MECHANICAL_CAPS: Svgs = svgs!("mechanical/icons/caps":
     "_blank" "_mouse" "_touchpad" "_pen"
     "Space" "Shift" "Caps" "Tab" "Backspace" "Enter" "Ctrl" "Alt" "Super");
+/// Only the mechanical blanks: every key gets Kiwi's own label or icon
+const KEYCAP_CAPS: Svgs = svgs!("mechanical/icons/caps": "_blank" "_mouse" "_touchpad" "_pen");
 const MAC_CAPS: Svgs = svgs!("mac/icons/caps":
     "_blank" "_mouse" "_touchpad" "_pen"
     "Space" "Shift" "Caps" "Tab" "Backspace" "Enter" "Ctrl" "Alt" "Super" "Esc"
@@ -450,7 +452,8 @@ impl Theme {
             | BuiltinTheme::Frosted
             | BuiltinTheme::Kiwi
             | BuiltinTheme::Mechanical
-            | BuiltinTheme::Mac => (keys, None),
+            | BuiltinTheme::Mac
+            | BuiltinTheme::Keycap => (keys, None),
         };
 
         let layout = match builtin {
@@ -476,6 +479,16 @@ impl Theme {
                         "https://github.com/misonoworks/misonocons",
                     ),
                 ],
+            ),
+            BuiltinTheme::Keycap => (
+                &[],
+                KEYCAP_CAPS,
+                vec![Credit::new(
+                    "Keycaps adapted from Free Keyboard Graphics",
+                    "q2apro, after Mysid and Incnis Mrsi",
+                    "Public domain",
+                    "https://github.com/q2apro/keyboard-keys-speedflips",
+                )],
             ),
             BuiltinTheme::Mac => (
                 &[],
@@ -507,7 +520,7 @@ impl Theme {
                 .map(|(name, bytes)| (name.to_string(), Cap::new(*bytes)))
                 .collect(),
             // The mechanical caps' top face sits above their thick front edge
-            cap_label: if builtin == BuiltinTheme::Mechanical {
+            cap_label: if matches!(builtin, BuiltinTheme::Mechanical | BuiltinTheme::Keycap) {
                 0.4
             } else {
                 0.5
@@ -594,7 +607,7 @@ impl Theme {
             },
             // Keycap themes: the box only shows for a key with no cap. The labels
             // are on the caps, and the "+" and badge are on the desktop.
-            BuiltinTheme::Mechanical | BuiltinTheme::Mac => {
+            BuiltinTheme::Mechanical | BuiltinTheme::Mac | BuiltinTheme::Keycap => {
                 let mac = builtin == BuiltinTheme::Mac;
                 let label = if mac {
                     rgb(0.11, 0.11, 0.12)
@@ -1361,7 +1374,11 @@ mod tests {
         assert_eq!(theme.cap("LDrag").unwrap().aspect, 1.0);
 
         // Keys without a cap use their device's blank, or the plain one
-        for builtin in [BuiltinTheme::Mechanical, BuiltinTheme::Mac] {
+        for builtin in [
+            BuiltinTheme::Mechanical,
+            BuiltinTheme::Mac,
+            BuiltinTheme::Keycap,
+        ] {
             let theme = Theme::builtin(builtin);
             let blank = |key| theme.blank_cap(key).map(|cap| cap.svg.id());
             let named = |name| theme.caps.get(name).map(|cap| cap.svg.id());
