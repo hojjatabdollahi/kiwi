@@ -11,14 +11,14 @@ use cosmic::iced::{Alignment, Color, Length};
 use cosmic::widget::{self, segmented_button, settings, svg, Svg};
 use cosmic::{Element, Task};
 
-use crate::color_picker::{color_picker, Hsva};
+use crate::color_picker::{color_picker, gradient_bar, Hsva};
 use crate::config::{IconStyle, OverlayPosition};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke, ICON_KEYS};
 use crate::settings::{segmented_model, select_segment, CHECKERBOARD_SVG};
 use crate::theme::{
     self, icon_file_stem, Fill, Hex, Layout, RailStyle, Repeats, Theme, ThemeChoice,
 };
-use crate::widgets::{color_chip, stepper};
+use crate::widgets::{fill_chip, stepper};
 use crate::{KiwiApp, Message};
 
 /// A color (or background) the drawer edits as hex text
@@ -162,8 +162,10 @@ pub enum CustomizeMessage {
     LayoutTab(segmented_button::Entity),
     SetDefaultSize(f32),
     SetRail(bool),
-    /// Open the picker for one color of a field, or close it if it's already open
+    /// Open the picker for a field (at the given gradient end), or close it if it's open
     PickColor(ColorField, usize),
+    /// Edit the start (0) or end (1) of the gradient being picked
+    PickStop(usize),
     PickerChanged(Hsva),
     PickerHex(String),
     PickerDone,
@@ -358,10 +360,8 @@ impl KiwiApp {
                 draft.picking = None;
             }
             M::PickColor(field, stop) => {
-                let already_open = draft
-                    .picking
-                    .as_ref()
-                    .is_some_and(|p| p.field == field && p.stop == stop);
+                // Clicking the field's chip again closes the picker, whichever end is open
+                let already_open = draft.picking.as_ref().is_some_and(|p| p.field == field);
                 draft.picking = if already_open {
                     None
                 } else {
@@ -374,6 +374,17 @@ impl KiwiApp {
                         before: field.get(&draft.theme),
                     })
                 };
+                return Task::none();
+            }
+            M::PickStop(stop) => {
+                let Some(picking) = &mut draft.picking else {
+                    return Task::none();
+                };
+                if let Some(color) = picking.field.stop(&draft.theme, stop) {
+                    picking.stop = stop;
+                    picking.hsva = Hsva::from_color(color.0);
+                    picking.hex = color.to_text();
+                }
                 return Task::none();
             }
             M::PickerChanged(hsva) => {
@@ -555,31 +566,26 @@ pub fn view<'a>(
 ) -> (Element<'a, Message>, Element<'a, Message>) {
     let theme = &draft.theme;
     let send = |m: CustomizeMessage| Message::Customize(m);
-    let is_picking = |field: ColorField, stop: usize| {
-        draft
-            .picking
-            .as_ref()
-            .is_some_and(|p| p.field == field && p.stop == stop)
-    };
 
-    // One chip per color of the field (two for a gradient), then its extra action
+    // The field's chip (a color, or a gradient), then its extra action
     let chips = move |field: ColorField| {
-        let stops = match field.get(theme) {
-            Some(Fill::Gradient(..)) => 2,
-            Some(Fill::Solid(_)) => 1,
-            None => 0,
-        };
+        let fill = field.get(theme);
         let mut row = widget::Row::new().spacing(6).align_y(Alignment::Center);
-        for stop in 0..stops {
-            let color = field.stop(theme, stop).map_or(NEW_DIVIDER.0, |c| c.0);
-            row = row.push(color_chip(
-                color,
-                is_picking(field, stop),
-                send(CustomizeMessage::PickColor(field, stop)),
+        if let Some(fill) = fill {
+            let (start, end) = match fill {
+                Fill::Solid(color) => (color.0, None),
+                Fill::Gradient(start, end) => (start.0, Some(end.0)),
+            };
+            let open = draft.picking.as_ref().is_some_and(|p| p.field == field);
+            row = row.push(fill_chip(
+                start,
+                end,
+                open,
+                send(CustomizeMessage::PickColor(field, 0)),
             ));
         }
         if field == ColorField::RailDivider {
-            row = row.push(if stops == 0 {
+            row = row.push(if fill.is_none() {
                 widget::button::link("Add").on_press(send(CustomizeMessage::PickColor(field, 0)))
             } else {
                 widget::button::link("Remove").on_press(send(CustomizeMessage::ClearColor(field)))
@@ -594,22 +600,27 @@ pub fn view<'a>(
         let gradient = matches!(field.get(theme), Some(Fill::Gradient(..)));
         let mut panel = widget::Column::new().spacing(8);
         if field.allows_gradient() {
-            let editing = match (gradient, picking.stop) {
-                (false, _) => "",
-                (true, 0) => "Editing the start color",
-                (true, _) => "Editing the end color",
+            let hint = if gradient {
+                "Click an end of the bar to edit that color"
+            } else {
+                ""
             };
             panel = panel.push(
                 widget::Row::new()
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .push(widget::text::caption(editing).width(Length::Fill))
+                    .push(widget::text::caption(hint).width(Length::Fill))
                     .push(widget::text::body("Gradient"))
                     .push(
                         widget::toggler(gradient)
                             .on_toggle(move |_| send(CustomizeMessage::ToggleGradient(field))),
                     ),
             );
+        }
+        if let Some(Fill::Gradient(start, end)) = field.get(theme) {
+            panel = panel.push(gradient_bar(start.0, end.0, picking.stop, move |stop| {
+                send(CustomizeMessage::PickStop(stop))
+            }));
         }
         Some(
             panel

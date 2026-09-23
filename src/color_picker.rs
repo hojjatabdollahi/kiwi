@@ -109,6 +109,105 @@ pub fn color_picker<'a, M: Clone + 'static>(
         .into()
 }
 
+/// A gradient's two colors as a bar with a handle at each end. The handle for
+/// the color being edited is ringed in the accent color; clicking near an end
+/// selects that color.
+pub fn gradient_bar<'a, M: Clone + 'static>(
+    start: Color,
+    end: Color,
+    active: usize,
+    on_select: impl Fn(usize) -> M + 'a,
+) -> Element<'a, M> {
+    widget::Canvas::new(GradientBar {
+        start,
+        end,
+        active,
+        on_select: Box::new(on_select),
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(28.0))
+    .into()
+}
+
+struct GradientBar<'a, M> {
+    start: Color,
+    end: Color,
+    active: usize,
+    on_select: Box<dyn Fn(usize) -> M + 'a>,
+}
+
+impl<M: Clone> canvas::Program<M, cosmic::Theme> for GradientBar<'_, M> {
+    type State = ();
+
+    fn update(
+        &self,
+        _state: &mut (),
+        event: &canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<M>> {
+        match event {
+            cosmic::iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let point = cursor.position_in(bounds)?;
+                let stop = usize::from(point.x > bounds.width / 2.0);
+                Some(canvas::Action::publish((self.on_select)(stop)).and_capture())
+            }
+            _ => None,
+        }
+    }
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &cosmic::Renderer,
+        theme: &cosmic::Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let (w, h) = (bounds.width, bounds.height);
+        let handle = h / 2.0 - 2.0;
+
+        // The bar runs between the handles' centers
+        let bar = Rectangle::new(
+            Point::new(handle, h * 0.25),
+            Size::new((w - 2.0 * handle).max(0.0), h * 0.5),
+        );
+        frame.with_clip(bar, |frame| checkerboard(frame, bar.size()));
+        let gradient = Linear::new(Point::new(bar.x, 0.0), Point::new(bar.x + bar.width, 0.0))
+            .add_stop(0.0, self.start)
+            .add_stop(1.0, self.end);
+        frame.fill(&Path::rectangle(bar.position(), bar.size()), gradient);
+
+        let accent = Color::from(theme.cosmic().accent_color());
+        for (stop, color, x) in [(0, self.start, handle), (1, self.end, w - handle)] {
+            let circle = Path::circle(Point::new(x, h / 2.0), handle - 1.0);
+            frame.fill(&circle, Color { a: 1.0, ..color });
+            ring(&mut frame, &circle);
+            if stop == self.active {
+                frame.stroke(
+                    &Path::circle(Point::new(x, h / 2.0), handle + 0.5),
+                    Stroke::default().with_color(accent).with_width(2.5),
+                );
+            }
+        }
+        vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &(),
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if cursor.is_over(bounds) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+}
+
 /// A small box showing a color over a checkerboard, so transparency shows
 pub fn swatch<'a, M: 'a>(color: Color) -> Element<'a, M> {
     widget::Canvas::new(Swatch(color))
@@ -275,7 +374,7 @@ fn ring(frame: &mut Frame, path: &Path) {
     );
 }
 
-fn checkerboard(frame: &mut Frame, size: Size) {
+pub(crate) fn checkerboard(frame: &mut Frame, size: Size) {
     let square = 6.0;
     frame.fill_rectangle(Point::ORIGIN, size, Color::from_rgb8(204, 204, 204));
     let (columns, rows) = (

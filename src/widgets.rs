@@ -48,31 +48,95 @@ pub fn stepper<'a, M: Clone + 'static>(
     .into()
 }
 
-/// A pill showing a color as a round swatch and its hex code, like "● #ffffff38"
-pub fn color_chip<'a, M: Clone + 'static>(
-    color: Color,
+/// A pill showing a color or a gradient and its hex codes: a round swatch and
+/// "#ffffff38" for one color, a gradient swatch and "#4d5973b8 → #33405966" for two
+pub fn fill_chip<'a, M: Clone + 'static>(
+    start: Color,
+    end: Option<Color>,
     selected: bool,
     on_press: M,
 ) -> Element<'a, M> {
-    let [r, g, b, a] = color.into_rgba8();
+    let hex = |color: Color| {
+        let [r, g, b, a] = color.into_rgba8();
+        format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
+    };
+    let (swatch, label): (Element<'a, M>, String) = match end {
+        None => (
+            widget::Canvas::new(RoundSwatch(start))
+                .width(Length::Fixed(20.0))
+                .height(Length::Fixed(20.0))
+                .into(),
+            hex(start),
+        ),
+        Some(end) => (
+            widget::Canvas::new(GradientSwatch { start, end })
+                .width(Length::Fixed(36.0))
+                .height(Length::Fixed(20.0))
+                .into(),
+            format!("{} → {}", hex(start), hex(end)),
+        ),
+    };
     let content = widget::Row::new()
         .spacing(8)
         .align_y(Alignment::Center)
-        .push(
-            widget::Canvas::new(RoundSwatch(color))
-                .width(Length::Fixed(20.0))
-                .height(Length::Fixed(20.0)),
-        )
-        .push(
-            widget::text::caption(format!("#{r:02x}{g:02x}{b:02x}{a:02x}"))
-                .font(cosmic::font::mono()),
-        );
+        .push(swatch)
+        .push(widget::text::caption(label).font(cosmic::font::mono()));
     button::custom(content)
         .padding([3, 10, 3, 3])
         .class(cosmic::theme::Button::Standard)
         .selected(selected)
         .on_press(on_press)
         .into()
+}
+
+/// A gradient in a pill shape, left to right, over a checkerboard so transparency shows
+struct GradientSwatch {
+    start: Color,
+    end: Color,
+}
+
+impl<M> canvas::Program<M, cosmic::Theme> for GradientSwatch {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &cosmic::Renderer,
+        theme: &cosmic::Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        use cosmic::iced::{Point, Size};
+        use cosmic::widget::canvas::gradient::Linear;
+
+        let mut frame = Frame::new(renderer, bounds.size());
+        let radius = bounds.height / 2.0 - 1.0;
+        let pill = Path::rounded_rectangle(
+            Point::new(1.0, 1.0),
+            Size::new(bounds.width - 2.0, bounds.height - 2.0),
+            radius.into(),
+        );
+        // Checkered between the round ends (the canvas can only clip to rectangles)
+        frame.fill(&pill, Color::from_rgb8(204, 204, 204));
+        frame.with_clip(
+            Rectangle::new(
+                Point::new(radius, 1.0),
+                Size::new(bounds.width - 2.0 * radius, bounds.height - 2.0),
+            ),
+            |frame| crate::color_picker::checkerboard(frame, bounds.size()),
+        );
+        let gradient = Linear::new(Point::ORIGIN, Point::new(bounds.width, 0.0))
+            .add_stop(0.0, self.start)
+            .add_stop(1.0, self.end);
+        frame.fill(&pill, gradient);
+        frame.stroke(
+            &pill,
+            Stroke::default()
+                .with_color(Color::from(theme.cosmic().bg_divider()))
+                .with_width(1.0),
+        );
+        vec![frame.into_geometry()]
+    }
 }
 
 /// A color in a circle, over a checkered circle so transparency shows
