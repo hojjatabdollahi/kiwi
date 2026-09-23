@@ -500,9 +500,12 @@ fn key_content<'a, M: 'a>(
         });
 
     if let Some((handle, apply_color)) = icon {
+        // Tinting an SVG only sets its color, not its alpha, so the icon fades
+        // with the key through the opacity instead
         let mut svg = Svg::new(handle)
             .width(Length::Fixed(icon_size))
-            .height(Length::Fixed(icon_size));
+            .height(Length::Fixed(icon_size))
+            .opacity(text_color.a);
 
         if apply_color {
             svg = svg.class(cosmic::theme::Svg::custom(move |_| svg::Style {
@@ -529,6 +532,8 @@ fn pressed_emblem<'a, M: 'a>(color: Color, emblem_size: f32) -> Element<'a, M> {
     Svg::new(handle)
         .width(Length::Fixed(emblem_size))
         .height(Length::Fixed(emblem_size))
+        // The tint doesn't carry alpha, so fade through the opacity
+        .opacity(color.a)
         .class(cosmic::theme::Svg::custom(move |_| svg::Style {
             color: Some(color),
         }))
