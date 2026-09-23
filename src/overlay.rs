@@ -11,8 +11,9 @@ use cosmic::surface::action::{app_layer_shell, LiveSettings};
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use wayland_client::protocol::wl_output::WlOutput;
 
-use crate::config::{IconStyle, OverlayPosition, Palette, PaletteType};
+use crate::config::{IconStyle, OverlayPosition};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke};
+use crate::theme::{Theme, ThemeChoice};
 use crate::{KiwiApp, Message};
 
 /// Maximum number of keystrokes in history
@@ -56,8 +57,10 @@ pub struct SharedState {
     pub key_size: f32,
     /// How long keystrokes stay visible (seconds)
     pub fade_duration: f32,
-    /// Color palette
-    pub palette: PaletteType,
+    /// Which theme is in use, to notice when the config switches it
+    pub theme_choice: ThemeChoice,
+    /// The loaded theme (shared with every view that draws keys)
+    pub theme: Arc<Theme>,
     /// Overlay position
     pub position: OverlayPosition,
     /// Key display mode (typed character vs physical key)
@@ -96,7 +99,8 @@ impl SharedState {
         enabled: bool,
         key_size: f32,
         fade_duration: f32,
-        palette: PaletteType,
+        theme_choice: ThemeChoice,
+        theme: Arc<Theme>,
         position: OverlayPosition,
         key_display_mode: crate::config::KeyDisplayMode,
         icon_style: IconStyle,
@@ -110,7 +114,8 @@ impl SharedState {
             enabled,
             key_size,
             fade_duration,
-            palette,
+            theme_choice,
+            theme,
             position,
             key_display_mode,
             icon_style,
@@ -134,7 +139,11 @@ impl SharedState {
         self.enabled = config.enabled;
         self.key_size = config.key_size;
         self.fade_duration = config.fade_duration;
-        self.palette = config.palette;
+        let theme_choice = ThemeChoice::from_config(config);
+        if theme_choice != self.theme_choice {
+            self.theme = Arc::new(theme_choice.load(&crate::theme::themes_dir()));
+            self.theme_choice = theme_choice;
+        }
         self.position = config.position;
         self.key_display_mode = config.key_display_mode;
         self.icon_style = config.icon_style;
@@ -198,7 +207,8 @@ impl Default for SharedState {
             enabled: true,
             key_size: 64.0,
             fade_duration: 5.0,
-            palette: PaletteType::Frosted,
+            theme_choice: ThemeChoice::Builtin(crate::config::PaletteType::Frosted),
+            theme: Arc::new(Theme::default()),
             position: OverlayPosition::TopRight,
             key_display_mode: crate::config::KeyDisplayMode::default(),
             icon_style: IconStyle::default(),
@@ -308,7 +318,7 @@ pub fn destroy_surface(surface_id: window::Id) -> cosmic::iced::Task<cosmic::Act
 #[derive(Debug)]
 struct TouchCanvas {
     touches: Vec<TouchPoint>,
-    palette: PaletteType,
+    style: crate::theme::KeyStyle,
     /// Marker size follows the same size slider as the keystroke widgets
     key_size: f32,
 }
@@ -327,7 +337,7 @@ impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for TouchCanvas {
         use cosmic::widget::canvas::{Frame, Path, Stroke};
 
         let mut frame = Frame::new(renderer, bounds.size());
-        let palette = Palette::from_type(self.palette);
+        let style = self.style;
 
         for touch in &self.touches {
             // Lifted fingers fade out while their ring expands slightly
@@ -339,12 +349,12 @@ impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for TouchCanvas {
 
             frame.fill(
                 &Path::circle(center, dot_radius),
-                with_opacity(palette.bg_pressed, opacity),
+                with_opacity(style.pressed.0, opacity),
             );
             frame.stroke(
                 &Path::circle(center, ring_radius),
                 Stroke::default()
-                    .with_color(with_opacity(palette.text, 0.85 * opacity))
+                    .with_color(with_opacity(style.text.0, 0.85 * opacity))
                     .with_width(3.0),
             );
         }
@@ -369,91 +379,83 @@ pub fn view_overlay(
     state: &Arc<Mutex<SharedState>>,
     show_touches: bool,
 ) -> cosmic::Element<'static, Message> {
-    let (
-        keystrokes,
-        key_size,
-        fade_duration,
-        palette,
-        position,
-        history_count,
-        icon_style,
-        touches,
-    ) = state
-        .lock()
-        .map(|s| {
-            if !s.enabled {
-                return (
-                    Vec::new(),
+    let (keystrokes, key_size, fade_duration, theme, position, history_count, icon_style, touches) =
+        state
+            .lock()
+            .map(|s| {
+                if !s.enabled {
+                    return (
+                        Vec::new(),
+                        s.key_size,
+                        s.fade_duration,
+                        s.theme.clone(),
+                        s.position,
+                        s.history_count,
+                        s.icon_style,
+                        Vec::new(),
+                    );
+                }
+
+                let mut display: Vec<Keystroke> = s.history.clone();
+
+                // Build current "pressed" keystroke from state
+                // Priority: mouse action > key > modifiers-only
+                if let Some((ref btn_str, _, has_moved)) = s.current_mouse {
+                    // Mouse button is pressed - show it (with modifiers if any)
+                    let display_str = if has_moved {
+                        crate::keystroke::drag_variant(btn_str).unwrap_or(btn_str)
+                    } else {
+                        btn_str.as_str()
+                    };
+
+                    let mouse_keystroke = if s.modifiers.any() {
+                        Keystroke::combination(&s.modifiers, display_str, true)
+                    } else {
+                        Keystroke::single(display_str, true)
+                    };
+                    display.push(mouse_keystroke);
+                } else if let Some((ref key, ref key_mods)) = s.current_key {
+                    // Key + modifiers pressed (use modifiers from when key was pressed)
+                    let current = if key_mods.any() {
+                        Keystroke::combination(key_mods, key.clone(), true)
+                    } else {
+                        Keystroke::single(key.clone(), true)
+                    };
+                    display.push(current);
+                } else if s.modifiers.any() {
+                    // Only modifiers pressed (no key, no mouse)
+                    if let Some(mods_keystroke) = Keystroke::from_modifiers(&s.modifiers, true) {
+                        display.push(mods_keystroke);
+                    }
+                }
+
+                let touches = if s.show_touch && show_touches {
+                    s.touches.clone()
+                } else {
+                    Vec::new()
+                };
+
+                (
+                    display,
                     s.key_size,
                     s.fade_duration,
-                    s.palette,
+                    s.theme.clone(),
                     s.position,
                     s.history_count,
                     s.icon_style,
-                    Vec::new(),
-                );
-            }
-
-            let mut display: Vec<Keystroke> = s.history.clone();
-
-            // Build current "pressed" keystroke from state
-            // Priority: mouse action > key > modifiers-only
-            if let Some((ref btn_str, _, has_moved)) = s.current_mouse {
-                // Mouse button is pressed - show it (with modifiers if any)
-                let display_str = if has_moved {
-                    crate::keystroke::drag_variant(btn_str).unwrap_or(btn_str)
-                } else {
-                    btn_str.as_str()
-                };
-
-                let mouse_keystroke = if s.modifiers.any() {
-                    Keystroke::combination(&s.modifiers, display_str, true)
-                } else {
-                    Keystroke::single(display_str, true)
-                };
-                display.push(mouse_keystroke);
-            } else if let Some((ref key, ref key_mods)) = s.current_key {
-                // Key + modifiers pressed (use modifiers from when key was pressed)
-                let current = if key_mods.any() {
-                    Keystroke::combination(key_mods, key.clone(), true)
-                } else {
-                    Keystroke::single(key.clone(), true)
-                };
-                display.push(current);
-            } else if s.modifiers.any() {
-                // Only modifiers pressed (no key, no mouse)
-                if let Some(mods_keystroke) = Keystroke::from_modifiers(&s.modifiers, true) {
-                    display.push(mods_keystroke);
-                }
-            }
-
-            let touches = if s.show_touch && show_touches {
-                s.touches.clone()
-            } else {
-                Vec::new()
-            };
-
-            (
-                display,
-                s.key_size,
-                s.fade_duration,
-                s.palette,
-                s.position,
-                s.history_count,
-                s.icon_style,
-                touches,
-            )
-        })
-        .unwrap_or((
-            Vec::new(),
-            36.0,
-            5.0,
-            PaletteType::default(),
-            OverlayPosition::default(),
-            5,
-            IconStyle::default(),
-            Vec::new(),
-        ));
+                    touches,
+                )
+            })
+            .unwrap_or((
+                Vec::new(),
+                36.0,
+                5.0,
+                Arc::new(Theme::default()),
+                OverlayPosition::default(),
+                5,
+                IconStyle::default(),
+                Vec::new(),
+            ));
 
     // Determine vertical and horizontal alignment based on position
     let (v_align, h_align) = match position {
@@ -489,7 +491,7 @@ pub fn view_overlay(
             &keystrokes,
             key_size,
             fade_duration,
-            palette,
+            &theme,
             position,
             history_count as usize,
             icon_style,
@@ -532,7 +534,7 @@ pub fn view_overlay(
     // Touch markers go behind the keystroke row, covering the whole surface
     let touch_layer = cosmic::widget::Canvas::new(TouchCanvas {
         touches,
-        palette,
+        style: theme.key,
         key_size,
     })
     .width(cosmic::iced::Length::Fill)

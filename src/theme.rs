@@ -1,0 +1,594 @@
+//! Overlay themes - how keystrokes are drawn.
+//!
+//! Built-in themes are defined here in code. User themes use the same struct,
+//! read from a `theme.ron` file, where any missing field falls back to the default theme.
+//!
+//! A user theme is a folder in [`themes_dir`]:
+//! ```text
+//! my-theme/
+//!   theme.ron
+//!   icons/Enter.svg, icons/LClick.svg, ...   (optional, see `icon_file_stem`)
+//! ```
+
+use std::collections::HashMap;
+use std::fs;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+
+use cosmic::iced::Color;
+use cosmic::widget::svg;
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::config::PaletteType;
+
+/// A color, written in theme files as "#rrggbb" or "#rrggbbaa"
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hex(pub Color);
+
+impl Serialize for Hex {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let [r, g, b, a] = self.0.into_rgba8();
+        serializer.serialize_str(&format!("#{r:02x}{g:02x}{b:02x}{a:02x}"))
+    }
+}
+
+impl<'de> Deserialize<'de> for Hex {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        parse_hex(&s).map(Hex).ok_or_else(|| {
+            de::Error::custom(format!(
+                "invalid color {s:?}, expected #rrggbb or #rrggbbaa"
+            ))
+        })
+    }
+}
+
+fn parse_hex(s: &str) -> Option<Color> {
+    let digits = s.strip_prefix('#')?;
+    if !digits.is_ascii() || !matches!(digits.len(), 6 | 8) {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16).ok();
+    let alpha = if digits.len() == 8 { byte(6)? } else { 255 };
+    Some(Color::from_rgba8(
+        byte(0)?,
+        byte(2)?,
+        byte(4)?,
+        alpha as f32 / 255.0,
+    ))
+}
+
+/// A background: one color, or two for a 45° gradient
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Fill {
+    Solid(Hex),
+    Gradient(Hex, Hex),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Stroke {
+    pub color: Hex,
+    pub width: f32,
+}
+
+/// How each key (or key combination) is drawn
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeyStyle {
+    /// Background of a released key
+    pub background: Fill,
+    /// Background while the key is held
+    pub pressed: Hex,
+    pub border: Stroke,
+    pub radius: f32,
+    /// Space between keys
+    pub gap: f32,
+    pub text: Hex,
+    /// Color of the "+" between the parts of a combination
+    pub separator: Hex,
+    /// Repeat count badge ("x2")
+    pub badge_text: Hex,
+    pub badge_background: Hex,
+}
+
+impl Default for KeyStyle {
+    fn default() -> Self {
+        Theme::default().key
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Theme {
+    pub key: KeyStyle,
+    /// Tint single-color icons with the key text color. Turn off for full-color icons.
+    pub recolor_icons: bool,
+    /// Icons from the theme's `icons/` folder, by file name without `.svg`
+    #[serde(skip)]
+    pub icons: HashMap<String, svg::Handle>,
+}
+
+impl Theme {
+    /// The built-in theme for one of the classic palettes
+    pub fn builtin(palette: PaletteType) -> Self {
+        let rgb = |r, g, b| Hex(Color::from_rgb(r, g, b));
+        let rgba = |r, g, b, a| Hex(Color::from_rgba(r, g, b, a));
+        let stroke = |color| Stroke { color, width: 1.0 };
+
+        let key = match palette {
+            // Classic dark with a subtle blue pressed state
+            PaletteType::Dark => KeyStyle {
+                background: Fill::Solid(rgba(0.0, 0.0, 0.0, 0.4)),
+                pressed: rgba(0.2, 0.2, 0.5, 0.5),
+                border: stroke(rgba(1.0, 1.0, 1.0, 0.25)),
+                radius: 6.0,
+                gap: 4.0,
+                text: rgb(1.0, 1.0, 1.0),
+                separator: rgba(1.0, 1.0, 1.0, 0.5),
+                badge_text: rgba(1.0, 1.0, 1.0, 1.0),
+                badge_background: rgba(0.0, 0.0, 0.0, 0.6),
+            },
+            // Bright with dark text
+            PaletteType::Light => KeyStyle {
+                background: Fill::Solid(rgba(0.95, 0.95, 0.97, 0.45)),
+                pressed: rgba(0.6, 0.65, 0.85, 0.5),
+                border: stroke(rgba(0.3, 0.3, 0.4, 0.3)),
+                radius: 6.0,
+                gap: 4.0,
+                text: rgb(0.1, 0.1, 0.15),
+                separator: rgba(0.2, 0.2, 0.3, 0.6),
+                badge_text: rgba(0.1, 0.1, 0.15, 1.0),
+                badge_background: rgba(1.0, 1.0, 1.0, 0.7),
+            },
+            // Translucent glass with a gradient
+            PaletteType::Frosted => KeyStyle {
+                background: Fill::Gradient(rgba(0.3, 0.35, 0.45, 0.5), rgba(0.2, 0.25, 0.35, 0.4)),
+                pressed: rgba(0.4, 0.5, 0.7, 0.7),
+                border: stroke(rgba(1.0, 1.0, 1.0, 0.2)),
+                radius: 6.0,
+                gap: 4.0,
+                text: rgb(1.0, 1.0, 1.0),
+                separator: rgba(1.0, 1.0, 1.0, 0.6),
+                badge_text: rgba(1.0, 1.0, 1.0, 1.0),
+                badge_background: rgba(0.1, 0.15, 0.25, 0.7),
+            },
+            // Kiwi green flesh, brown skin border, cream and seed-colored badge
+            PaletteType::Kiwi => KeyStyle {
+                background: Fill::Gradient(
+                    rgba(0.55, 0.75, 0.25, 0.55),
+                    rgba(0.7, 0.82, 0.45, 0.45),
+                ),
+                pressed: rgba(0.35, 0.55, 0.18, 0.75),
+                border: stroke(rgba(0.45, 0.32, 0.2, 0.5)),
+                radius: 6.0,
+                gap: 4.0,
+                text: rgb(0.98, 0.97, 0.92),
+                separator: rgba(0.85, 0.9, 0.75, 0.8),
+                badge_text: rgba(0.15, 0.12, 0.08, 1.0),
+                badge_background: rgba(0.95, 0.93, 0.85, 0.85),
+            },
+        };
+
+        Self {
+            key,
+            recolor_icons: true,
+            icons: HashMap::new(),
+        }
+    }
+
+    /// Read a user theme folder: `theme.ron` plus any `icons/*.svg`
+    pub fn load(dir: &Path) -> Result<Self, String> {
+        let file = dir.join(THEME_FILE);
+        let text = fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let mut theme: Theme =
+            ron::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+
+        if let Ok(entries) = fs::read_dir(dir.join(ICONS_DIR)) {
+            for path in entries.flatten().map(|entry| entry.path()) {
+                let Some(stem) = svg_stem(&path) else {
+                    continue;
+                };
+                match fs::read(&path) {
+                    Ok(bytes) => {
+                        theme
+                            .icons
+                            .insert(stem.to_string(), svg::Handle::from_memory(bytes));
+                    }
+                    Err(e) => log::warn!("Skipping icon {}: {e}", path.display()),
+                }
+            }
+        }
+        Ok(theme)
+    }
+
+    /// The theme's own icon for `key`, if its icon folder has one
+    pub fn icon(&self, key: &str) -> Option<&svg::Handle> {
+        self.icons.get(icon_file_stem(key))
+    }
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self::builtin(PaletteType::Frosted)
+    }
+}
+
+const THEME_FILE: &str = "theme.ron";
+const ICONS_DIR: &str = "icons";
+
+/// The icon file name (without `.svg`) for a key. Most keys use the name Kiwi
+/// already gives them ("LClick", "PgUp", "2Up", "Pad3"); the ones shown as a
+/// symbol get a readable name instead.
+pub fn icon_file_stem(key: &str) -> &str {
+    match key {
+        "↵" => "Enter",
+        "⇧" => "Shift",
+        "⌫" => "Backspace",
+        "␣" => "Space",
+        other => other,
+    }
+}
+
+/// File name without `.svg`, for SVG files only
+fn svg_stem(path: &Path) -> Option<&str> {
+    if path.extension()? != "svg" {
+        return None;
+    }
+    path.file_stem()?.to_str()
+}
+
+/// Where user themes live: `$XDG_CONFIG_HOME/kiwi/themes`, usually `~/.config/kiwi/themes`
+pub fn themes_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .unwrap_or_default()
+        .join("kiwi")
+        .join("themes")
+}
+
+/// Which theme is in use: a built-in palette or a user theme folder
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThemeChoice {
+    Builtin(PaletteType),
+    User(String),
+}
+
+impl ThemeChoice {
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        match &config.user_theme {
+            Some(name) => Self::User(name.clone()),
+            None => Self::Builtin(config.palette),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Builtin(palette) => palette.name(),
+            Self::User(name) => name,
+        }
+    }
+
+    /// Built-in themes first, then the user's theme folders by name
+    pub fn all(themes_dir: &Path) -> Vec<Self> {
+        let mut user: Vec<String> = fs::read_dir(themes_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().join(THEME_FILE).is_file())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        user.sort();
+
+        PaletteType::ALL
+            .iter()
+            .map(|palette| Self::Builtin(*palette))
+            .chain(user.into_iter().map(Self::User))
+            .collect()
+    }
+
+    /// Load the theme. A user theme that can't be read falls back to the default.
+    pub fn load(&self, themes_dir: &Path) -> Theme {
+        match self {
+            Self::Builtin(palette) => Theme::builtin(*palette),
+            Self::User(name) => Theme::load(&themes_dir.join(name)).unwrap_or_else(|e| {
+                log::warn!("Can't load theme {name:?}, using the default: {e}");
+                Theme::default()
+            }),
+        }
+    }
+}
+
+/// Largest single file accepted from a theme zip
+const MAX_IMPORT_FILE: u64 = 2 * 1024 * 1024;
+/// Most files accepted from a theme zip
+const MAX_IMPORT_FILES: usize = 1000;
+
+/// Unpack a theme zip into `themes_dir` and return the new theme's name.
+///
+/// The zip needs a `theme.ron`, either at the top or inside one folder. Only
+/// that file and `icons/*.svg` next to it are copied; everything else is ignored.
+/// The theme is named after the zip file; an existing theme with that name is kept
+/// and the new one gets a number added.
+pub fn import(zip_path: &Path, themes_dir: &Path) -> Result<String, String> {
+    let file = fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Not a zip file: {e}"))?;
+    if archive.len() > MAX_IMPORT_FILES {
+        return Err(format!("Too many files (more than {MAX_IMPORT_FILES})"));
+    }
+
+    // Read the files a theme can contain, with paths made safe by the zip crate
+    let mut files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let Some(path) = entry.enclosed_name().filter(|_| entry.is_file()) else {
+            continue;
+        };
+        if path.file_name() != Some(THEME_FILE.as_ref()) && svg_stem(&path).is_none() {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        entry
+            .by_ref()
+            .take(MAX_IMPORT_FILE + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if bytes.len() as u64 > MAX_IMPORT_FILE {
+            return Err(format!("{} is larger than 2 MB", path.display()));
+        }
+        files.push((path, bytes));
+    }
+
+    // theme.ron marks the root; zipping a folder puts everything one level down
+    let root = files
+        .iter()
+        .map(|(path, _)| path)
+        .filter(|path| path.file_name() == Some(THEME_FILE.as_ref()))
+        .min_by_key(|path| path.components().count())
+        .and_then(|path| path.parent())
+        .map(Path::to_path_buf)
+        .ok_or("The zip has no theme.ron")?;
+    let theme_text = files
+        .iter()
+        .find(|(path, _)| *path == root.join(THEME_FILE))
+        .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+        .unwrap_or_default();
+    ron::from_str::<Theme>(&theme_text).map_err(|e| format!("theme.ron: {e}"))?;
+
+    let base = zip_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(folder_name)
+        .unwrap_or_default();
+    let base = if base.is_empty() {
+        "Imported theme".to_string()
+    } else {
+        base
+    };
+    let name = (1..)
+        .map(|n| {
+            if n == 1 {
+                base.clone()
+            } else {
+                format!("{base} {n}")
+            }
+        })
+        .find(|name| !themes_dir.join(name).exists())
+        .unwrap_or(base);
+
+    let dest = themes_dir.join(&name);
+    let write = || -> std::io::Result<()> {
+        fs::create_dir_all(dest.join(ICONS_DIR))?;
+        fs::write(dest.join(THEME_FILE), &theme_text)?;
+        for (path, bytes) in &files {
+            let in_icons = path.parent() == Some(&root.join(ICONS_DIR));
+            if let (true, Some(file_name)) =
+                (in_icons && svg_stem(path).is_some(), path.file_name())
+            {
+                fs::write(dest.join(ICONS_DIR).join(file_name), bytes)?;
+            }
+        }
+        Ok(())
+    };
+    write().map_err(|e| {
+        let _ = fs::remove_dir_all(&dest);
+        format!("Can't write {}: {e}", dest.display())
+    })?;
+    Ok(name)
+}
+
+/// Keep a name usable as a folder: letters, digits, spaces, `-` and `_`
+fn folder_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// Write a theme to a zip: `theme.ron` at the top and a user theme's icons under `icons/`.
+///
+/// A user theme's `theme.ron` is copied as-is (keeping its comments); a built-in
+/// theme is written out from code.
+pub fn export(choice: &ThemeChoice, themes_dir: &Path, dest: &Path) -> Result<(), String> {
+    let (theme_text, icons_dir) = match choice {
+        ThemeChoice::Builtin(palette) => {
+            let pretty = ron::ser::PrettyConfig::default();
+            let text = ron::ser::to_string_pretty(&Theme::builtin(*palette), pretty)
+                .map_err(|e| e.to_string())?;
+            (text, None)
+        }
+        ThemeChoice::User(name) => {
+            let dir = themes_dir.join(name);
+            let text = fs::read_to_string(dir.join(THEME_FILE)).map_err(|e| e.to_string())?;
+            (text, Some(dir.join(ICONS_DIR)))
+        }
+    };
+
+    let write = || -> zip::result::ZipResult<()> {
+        let options = zip::write::SimpleFileOptions::default();
+        let mut zip = zip::ZipWriter::new(fs::File::create(dest)?);
+        zip.start_file(THEME_FILE, options)?;
+        zip.write_all(theme_text.as_bytes())?;
+
+        let mut icons: Vec<PathBuf> = icons_dir
+            .and_then(|dir| fs::read_dir(dir).ok())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| svg_stem(path).is_some())
+            .collect();
+        icons.sort();
+        for path in icons {
+            let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            zip.start_file(format!("{ICONS_DIR}/{file_name}"), options)?;
+            zip.write_all(&fs::read(&path)?)?;
+        }
+        zip.finish()?;
+        Ok(())
+    };
+    write().map_err(|e| format!("Can't write {}: {e}", dest.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_colors_parse() {
+        assert_eq!(
+            parse_hex("#ff000080"),
+            Some(Color::from_rgba8(255, 0, 0, 128.0 / 255.0))
+        );
+        assert_eq!(parse_hex("#00ff00"), Some(Color::from_rgb8(0, 255, 0)));
+        for bad in ["ff0000", "#ff00", "#gg0000", "#ff00000", "#ÿÿÿ"] {
+            assert_eq!(parse_hex(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn missing_fields_fall_back_to_default() {
+        let theme: Theme =
+            ron::from_str(r##"(key: (background: ["#000000", "#ffffff"], gap: 0))"##).unwrap();
+        assert_eq!(
+            theme.key.background,
+            Fill::Gradient(Hex(Color::BLACK), Hex(Color::WHITE))
+        );
+        assert_eq!(theme.key.gap, 0.0);
+        assert_eq!(theme.key.radius, Theme::default().key.radius);
+
+        let empty: Theme = ron::from_str("()").unwrap();
+        assert_eq!(empty, Theme::default());
+    }
+
+    /// A fresh, empty folder for one test
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("kiwi-theme-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_zip(path: &Path, files: &[(&str, &str)]) {
+        let mut zip = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        for (name, body) in files {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    const SVG: &str = "<svg xmlns='http://www.w3.org/2000/svg'/>";
+
+    #[test]
+    fn export_then_import_keeps_theme_and_icons() {
+        let dir = scratch("roundtrip");
+        let themes = dir.join("themes");
+        let user = themes.join("Mine");
+        fs::create_dir_all(user.join("icons")).unwrap();
+        fs::write(user.join("theme.ron"), "// hand-written\n(key: (gap: 9.0))").unwrap();
+        fs::write(user.join("icons/Enter.svg"), SVG).unwrap();
+
+        let zip = dir.join("Mine.zip");
+        export(&ThemeChoice::User("Mine".into()), &themes, &zip).unwrap();
+        // The name is taken, so the import gets a number
+        assert_eq!(import(&zip, &themes).unwrap(), "Mine 2");
+
+        let theme = Theme::load(&themes.join("Mine 2")).unwrap();
+        assert_eq!(theme.key.gap, 9.0);
+        assert!(theme.icon("↵").is_some());
+        assert!(fs::read_to_string(themes.join("Mine 2/theme.ron"))
+            .unwrap()
+            .starts_with("// hand-written"));
+        assert_eq!(
+            ThemeChoice::all(&themes)[PaletteType::ALL.len()..],
+            [
+                ThemeChoice::User("Mine".into()),
+                ThemeChoice::User("Mine 2".into())
+            ]
+        );
+
+        let builtin = dir.join("Kiwi.zip");
+        export(&ThemeChoice::Builtin(PaletteType::Kiwi), &themes, &builtin).unwrap();
+        let name = import(&builtin, &themes).unwrap();
+        // Colors go through 8-bit hex, so compare what the file holds
+        let border = |theme: Theme| ron::to_string(&theme.key.border).unwrap();
+        assert_eq!(
+            border(Theme::load(&themes.join(name)).unwrap()),
+            border(Theme::builtin(PaletteType::Kiwi))
+        );
+    }
+
+    #[test]
+    fn import_takes_only_theme_files() {
+        let dir = scratch("unsafe");
+        let themes = dir.join("themes");
+        let zip = dir.join("../weird name!.zip");
+        write_zip(
+            &zip,
+            &[
+                ("folder/theme.ron", "()"),
+                ("folder/icons/Tab.svg", SVG),
+                ("folder/icons/run.sh", "echo hi"),
+                ("../../escape.svg", SVG),
+                ("folder/icons/nested/Deep.svg", SVG),
+            ],
+        );
+        let name = import(&zip, &themes).unwrap();
+        assert_eq!(name, "weird name");
+
+        let mut files: Vec<_> = fs::read_dir(themes.join(&name).join("icons"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        files.sort();
+        assert_eq!(files, ["Tab.svg"]);
+        assert!(!dir.join("escape.svg").exists() && !themes.join("escape.svg").exists());
+        fs::remove_file(zip).unwrap();
+
+        let broken = dir.join("broken.zip");
+        write_zip(&broken, &[("theme.ron", "(key: (gap: \"wide\"))")]);
+        assert!(import(&broken, &themes).is_err());
+        write_zip(&broken, &[("icons/Tab.svg", SVG)]);
+        assert!(import(&broken, &themes).is_err());
+        assert!(!themes.join("broken").exists());
+    }
+
+    #[test]
+    fn written_themes_read_back() {
+        for palette in PaletteType::ALL {
+            let theme = Theme::builtin(*palette);
+            let text = ron::to_string(&theme).unwrap();
+            let read: Theme = ron::from_str(&text).unwrap();
+            // Colors go through 8-bit hex, so compare what the file holds
+            assert_eq!(ron::to_string(&read).unwrap(), text);
+        }
+    }
+}

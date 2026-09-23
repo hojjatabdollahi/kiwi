@@ -8,6 +8,7 @@ mod keystroke;
 mod overlay;
 mod position_selector;
 mod settings;
+mod theme;
 mod tray;
 
 use std::any::TypeId;
@@ -26,10 +27,11 @@ use cosmic::widget::about::About;
 use crossbeam_channel::{Receiver as CbReceiver, Sender as CbSender};
 use wayland_client::protocol::wl_output::WlOutput;
 
-use config::{Config, OverlayPosition, PaletteType, APP_ID};
+use config::{Config, OverlayPosition, APP_ID};
 use overlay::{
     create_layer_surface_for_output, destroy_surface, view_overlay, OutputState, SharedState,
 };
+use theme::{Theme, ThemeChoice};
 
 const REPOSITORY: &str = "https://github.com/hojjatabdollahi/kiwi";
 const APP_ICON: &[u8] = include_bytes!("../data/icons/kiwi-on.svg");
@@ -86,6 +88,10 @@ struct KiwiApp {
     context_page: ContextPage,
     /// About page widget
     about: About,
+    /// Every theme the settings window offers, loaded when it opens
+    themes: Vec<(ThemeChoice, Arc<Theme>)>,
+    /// Result of the last theme import/export, shown under the theme cards
+    theme_message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,7 +110,13 @@ pub enum Message {
     ToggleActive(bool),
     SetKeySize(f32),
     SetFadeDuration(f32),
-    SetPaletteIndex(usize),
+    SelectTheme(ThemeChoice),
+    OpenThemesFolder,
+    ImportTheme,
+    ImportThemeFrom(std::path::PathBuf),
+    ExportTheme,
+    ExportThemeTo(std::path::PathBuf),
+    ThemeMessage(String),
     SetPosition(OverlayPosition),
     SetKeyDisplayMode(config::KeyDisplayMode),
     SetIconStyle(config::IconStyle),
@@ -152,17 +164,23 @@ impl cosmic::Application for KiwiApp {
 
         // Load config
         let config_handler = cosmic_config::Config::new(APP_ID, Config::VERSION).ok();
+        // Keys missing from an older config get their defaults instead of
+        // resetting the whole config
         let config = config_handler
             .as_ref()
-            .and_then(|h| Config::get_entry(h).ok())
+            .map(|h| Config::get_entry(h).unwrap_or_else(|(_, config)| config))
             .unwrap_or_default();
+
+        let theme_choice = ThemeChoice::from_config(&config);
+        let theme = Arc::new(theme_choice.load(&theme::themes_dir()));
 
         // Create shared state for overlay
         let shared_state = Arc::new(Mutex::new(SharedState::new(
             config.enabled,
             config.key_size,
             config.fade_duration,
-            config.palette,
+            theme_choice,
+            theme,
             config.position,
             config.key_display_mode,
             config.icon_style,
@@ -210,6 +228,8 @@ impl cosmic::Application for KiwiApp {
             outputs: Vec::new(),
             context_page: ContextPage::default(),
             about,
+            themes: Vec::new(),
+            theme_message: None,
         };
 
         // Load bundled font
@@ -284,7 +304,9 @@ impl cosmic::Application for KiwiApp {
         settings::settings_view(
             self.config.key_size,
             self.config.fade_duration,
-            self.config.palette,
+            &self.themes,
+            &ThemeChoice::from_config(&self.config),
+            self.theme_message.as_deref(),
             self.config.position,
             self.config.key_display_mode,
             self.config.icon_style,
@@ -306,7 +328,9 @@ impl cosmic::Application for KiwiApp {
             settings::settings_view(
                 self.config.key_size,
                 self.config.fade_duration,
-                self.config.palette,
+                &self.themes,
+                &ThemeChoice::from_config(&self.config),
+                self.theme_message.as_deref(),
                 self.config.position,
                 self.config.key_display_mode,
                 self.config.icon_style,
@@ -401,6 +425,7 @@ impl cosmic::Application for KiwiApp {
                 }
 
                 // No window exists, open a new one
+                self.reload_themes();
                 let settings = window::Settings {
                     size: Size::new(400.0, 550.0),
                     decorations: false, // libcosmic provides its own header bar
@@ -466,17 +491,69 @@ impl cosmic::Application for KiwiApp {
                     state.fade_duration = duration;
                 }
             }
-            Message::SetPaletteIndex(index) => {
-                if let Some(palette) = PaletteType::ALL.get(index) {
-                    self.config.palette = *palette;
-                    self.save_config();
-
-                    // Update shared state
-                    if let Ok(mut state) = self.shared_state.lock() {
-                        state.palette = *palette;
-                    }
+            Message::SelectTheme(choice) => self.select_theme(choice),
+            Message::OpenThemesFolder => {
+                let dir = theme::themes_dir();
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    log::error!("Can't create {}: {}", dir.display(), e);
+                }
+                if let Err(e) = open::that_detached(&dir) {
+                    log::error!("Failed to open {}: {}", dir.display(), e);
                 }
             }
+            Message::ImportTheme => {
+                use cosmic::dialog::file_chooser::{open, FileFilter};
+                let dialog = open::Dialog::new()
+                    .title("Import a Kiwi theme".to_string())
+                    .filter(FileFilter::new("Kiwi theme").glob("*.zip"));
+                return cosmic::task::future(async move {
+                    match dialog.open_file().await {
+                        Ok(response) => match response.url().to_file_path() {
+                            Ok(path) => Message::ImportThemeFrom(path).into(),
+                            Err(()) => {
+                                Message::ThemeMessage("Only local files can be imported".into())
+                                    .into()
+                            }
+                        },
+                        Err(e) => dialog_failed(e),
+                    }
+                });
+            }
+            Message::ImportThemeFrom(path) => match theme::import(&path, &theme::themes_dir()) {
+                Ok(name) => {
+                    self.reload_themes();
+                    self.theme_message = Some(format!("Imported “{name}”"));
+                    self.select_theme(ThemeChoice::User(name));
+                }
+                Err(e) => self.theme_message = Some(format!("Can't import: {e}")),
+            },
+            Message::ExportTheme => {
+                use cosmic::dialog::file_chooser::save;
+                let file_name = format!("{}.zip", ThemeChoice::from_config(&self.config).name());
+                let dialog = save::Dialog::new()
+                    .title("Export theme".to_string())
+                    .file_name(file_name);
+                return cosmic::task::future(async move {
+                    match dialog.save_file().await {
+                        Ok(response) => match response.url().map(|url| url.to_file_path()) {
+                            Some(Ok(path)) => Message::ExportThemeTo(path).into(),
+                            _ => {
+                                Message::ThemeMessage("Only local files can be saved".into()).into()
+                            }
+                        },
+                        Err(e) => dialog_failed(e),
+                    }
+                });
+            }
+            Message::ExportThemeTo(path) => {
+                let choice = ThemeChoice::from_config(&self.config);
+                self.theme_message =
+                    Some(match theme::export(&choice, &theme::themes_dir(), &path) {
+                        Ok(()) => format!("Exported to {}", path.display()),
+                        Err(e) => format!("Can't export: {e}"),
+                    });
+            }
+            Message::ThemeMessage(message) => self.theme_message = Some(message),
             Message::SetPosition(position) => {
                 let old_position = self.config.position;
                 self.config.position = position;
@@ -664,7 +741,49 @@ fn tray_subscription(rx: CbReceiver<tray::TrayAction>) -> Subscription<Message> 
     })
 }
 
+/// Turn a failed file dialog into a message, staying quiet when it was just cancelled
+fn dialog_failed(error: cosmic::dialog::file_chooser::Error) -> cosmic::Action<Message> {
+    match error {
+        cosmic::dialog::file_chooser::Error::Cancelled => cosmic::Action::None,
+        e => Message::ThemeMessage(format!("File dialog failed: {e}")).into(),
+    }
+}
+
 impl KiwiApp {
+    /// Re-read the list of themes (built-in and the themes folder)
+    fn reload_themes(&mut self) {
+        let dir = theme::themes_dir();
+        self.themes = ThemeChoice::all(&dir)
+            .into_iter()
+            .map(|choice| {
+                let theme = Arc::new(choice.load(&dir));
+                (choice, theme)
+            })
+            .collect();
+    }
+
+    fn select_theme(&mut self, choice: ThemeChoice) {
+        match &choice {
+            ThemeChoice::Builtin(palette) => {
+                self.config.palette = *palette;
+                self.config.user_theme = None;
+            }
+            ThemeChoice::User(name) => self.config.user_theme = Some(name.clone()),
+        }
+        self.save_config();
+
+        let theme = self
+            .themes
+            .iter()
+            .find(|(c, _)| *c == choice)
+            .map(|(_, theme)| theme.clone())
+            .unwrap_or_else(|| Arc::new(choice.load(&theme::themes_dir())));
+        if let Ok(mut state) = self.shared_state.lock() {
+            state.theme_choice = choice;
+            state.theme = theme;
+        }
+    }
+
     fn save_config(&self) {
         if let Some(ref handler) = self.config_handler {
             if let Err(e) = self.config.write_entry(handler) {

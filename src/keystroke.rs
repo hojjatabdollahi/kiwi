@@ -2,7 +2,8 @@
 
 use std::time::Instant;
 
-use crate::config::{IconStyle, OverlayPosition, Palette, PaletteType};
+use crate::config::{IconStyle, OverlayPosition};
+use crate::theme::{Fill, Theme};
 
 // Bundled font for keystroke text
 const FONT_BYTES: &[u8] = include_bytes!("../data/GemunuLibre-VariableFont_wght.ttf");
@@ -254,11 +255,8 @@ fn ease_in_cubic(t: f32) -> f32 {
     t.powi(3)
 }
 
-// Style constants
-const BORDER_WIDTH: f32 = 1.0;
-const BORDER_RADIUS: f32 = 6.0;
+// Layout constants (colors and shapes come from the theme)
 const PLUS_WIDTH: f32 = 10.0; // Width for the "+" separator
-const KEY_GAP: f32 = 4.0;
 
 /// Calculate font size based on key size
 fn font_size_for_key(key_size: f32) -> f32 {
@@ -290,7 +288,10 @@ pub fn drag_variant(key: &str) -> Option<&'static str> {
 fn get_icon_for_key_with_style(key: &str, icon_style: IconStyle) -> Option<(&'static [u8], bool)> {
     let use_text = matches!(icon_style, IconStyle::Text);
 
-    if let Some(n) = key.strip_prefix("Pad").and_then(|n| n.parse::<usize>().ok()) {
+    if let Some(n) = key
+        .strip_prefix("Pad")
+        .and_then(|n| n.parse::<usize>().ok())
+    {
         return ICON_PAD.get(n.wrapping_sub(1)).map(|icon| (*icon, true));
     }
 
@@ -410,13 +411,21 @@ fn key_content<'a, M: 'a>(
     text_color: Color,
     key_size: f32,
     icon_style: IconStyle,
+    theme: &Theme,
 ) -> Element<'a, M> {
     let icon_size = icon_size_for_key(key_size);
     let font_size = font_size_for_key(key_size);
 
-    if let Some((icon_data, apply_color)) = get_icon_for_key_with_style(key, icon_style) {
-        // Use embedded SVG icon
-        let handle = svg::Handle::from_memory(icon_data);
+    // The theme's own icon wins, then Kiwi's built-in one, then the key name as text
+    let icon = theme
+        .icon(key)
+        .map(|handle| (handle.clone(), theme.recolor_icons))
+        .or_else(|| {
+            get_icon_for_key_with_style(key, icon_style)
+                .map(|(data, apply_color)| (svg::Handle::from_memory(data), apply_color))
+        });
+
+    if let Some((handle, apply_color)) = icon {
         let mut svg = Svg::new(handle)
             .width(Length::Fixed(icon_size))
             .height(Length::Fixed(icon_size));
@@ -464,8 +473,9 @@ fn key_content_with_emblem<'a, M: 'a>(
     key_size: f32,
     pressed: bool,
     icon_style: IconStyle,
+    theme: &Theme,
 ) -> Element<'a, M> {
-    let content = key_content(key, text_color, key_size, icon_style);
+    let content = key_content(key, text_color, key_size, icon_style, theme);
 
     if pressed {
         let emblem_size = key_size * 0.22; // Smaller emblem
@@ -561,7 +571,7 @@ pub fn keystroke_widget<'a, M: 'a>(
     keystroke: &Keystroke,
     key_size: f32,
     fade_duration: f32,
-    palette_type: PaletteType,
+    theme: &Theme,
     fade_enabled: bool,
     position: OverlayPosition,
     icon_style: IconStyle,
@@ -572,24 +582,35 @@ pub fn keystroke_widget<'a, M: 'a>(
         1.0
     };
     let plus_font_size = plus_font_size_for_key(key_size);
-    let palette = Palette::from_type(palette_type).with_opacity(opacity);
-
-    let background = if keystroke.pressed {
-        Background::Color(palette.bg_pressed)
-    } else if let Some(gradient_end) = palette.bg_gradient_end {
-        // Use gradient for frosted glass effect
-        let grad = gradient::Linear::new(std::f32::consts::PI / 4.0) // 45 degree angle
-            .add_stop(0.0, palette.bg_released)
-            .add_stop(1.0, gradient_end);
-        Background::Gradient(gradient::Gradient::Linear(grad))
-    } else {
-        Background::Color(palette.bg_released)
+    let style = theme.key;
+    let fade = |color: Color| Color {
+        a: color.a * opacity,
+        ..color
     };
 
-    let border_color = palette.border;
-    let text_color = palette.text;
-    let plus_color = palette.plus;
-    let count_color = palette.count;
+    let background = if keystroke.pressed {
+        Background::Color(fade(style.pressed.0))
+    } else {
+        match style.background {
+            Fill::Solid(color) => Background::Color(fade(color.0)),
+            Fill::Gradient(start, end) => {
+                let grad = gradient::Linear::new(std::f32::consts::PI / 4.0) // 45 degree angle
+                    .add_stop(0.0, fade(start.0))
+                    .add_stop(1.0, fade(end.0));
+                Background::Gradient(gradient::Gradient::Linear(grad))
+            }
+        }
+    };
+
+    let border = Border {
+        color: fade(style.border.color.0),
+        width: style.border.width,
+        radius: style.radius.into(),
+    };
+    let text_color = fade(style.text.0);
+    let plus_color = fade(style.separator.0);
+    let count_color = fade(style.badge_text.0);
+    let count_bg = fade(style.badge_background.0);
 
     if keystroke.is_combination() {
         // Combination: outer border, inner key boxes without borders
@@ -621,6 +642,7 @@ pub fn keystroke_widget<'a, M: 'a>(
                     key_size,
                     keystroke.pressed,
                     icon_style,
+                    theme,
                 ))
                 .width(Length::Fixed(key_size))
                 .height(Length::Fixed(key_size))
@@ -642,11 +664,7 @@ pub fn keystroke_widget<'a, M: 'a>(
         .class(cosmic::theme::Container::custom(move |_| {
             container::Style {
                 background: Some(background),
-                border: Border {
-                    color: border_color,
-                    width: BORDER_WIDTH,
-                    radius: BORDER_RADIUS.into(),
-                },
+                border,
                 ..Default::default()
             }
         }));
@@ -657,7 +675,7 @@ pub fn keystroke_widget<'a, M: 'a>(
             keystroke.count,
             key_size,
             count_color,
-            palette.count_bg,
+            count_bg,
             position,
         )
     } else {
@@ -668,6 +686,7 @@ pub fn keystroke_widget<'a, M: 'a>(
             key_size,
             keystroke.pressed,
             icon_style,
+            theme,
         ))
         .width(Length::Fixed(key_size))
         .height(Length::Fixed(key_size))
@@ -676,11 +695,7 @@ pub fn keystroke_widget<'a, M: 'a>(
         .class(cosmic::theme::Container::custom(move |_| {
             container::Style {
                 background: Some(background),
-                border: Border {
-                    color: border_color,
-                    width: BORDER_WIDTH,
-                    radius: BORDER_RADIUS.into(),
-                },
+                border,
                 ..Default::default()
             }
         }));
@@ -691,7 +706,7 @@ pub fn keystroke_widget<'a, M: 'a>(
             keystroke.count,
             key_size,
             count_color,
-            palette.count_bg,
+            count_bg,
             position,
         )
     }
@@ -702,7 +717,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     keystrokes: &[Keystroke],
     key_size: f32,
     fade_duration: f32,
-    palette_type: PaletteType,
+    theme: &Theme,
     position: OverlayPosition,
     history_count: usize,
     icon_style: IconStyle,
@@ -725,7 +740,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
                 k,
                 key_size,
                 fade_duration,
-                palette_type,
+                theme,
                 true,
                 position,
                 icon_style,
@@ -754,7 +769,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     };
 
     widget::row::with_children(ordered_children)
-        .spacing(KEY_GAP)
+        .spacing(theme.key.gap)
         .align_y(if is_bottom {
             iced::Alignment::End
         } else {

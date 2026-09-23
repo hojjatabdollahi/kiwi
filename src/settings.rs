@@ -7,28 +7,33 @@ use cosmic::widget::scrollable;
 use cosmic::widget::svg;
 use cosmic::widget::Svg;
 
-use crate::config::{IconStyle, KeyDisplayMode, OverlayPosition, PaletteType, APP_VERSION};
-use crate::keystroke::{keystroke_widget, Keystroke};
+use std::sync::Arc;
+
+use crate::config::{IconStyle, KeyDisplayMode, OverlayPosition, APP_VERSION};
+use crate::keystroke::{keystroke_widget, KeyModifiers, Keystroke};
 use crate::position_selector::PositionSelector;
+use crate::theme::{Theme, ThemeChoice};
 use crate::Message;
 
 // Checkerboard pattern SVG for transparency preview
+// (wide, with small squares, so it can cover a card without the squares growing)
 const CHECKERBOARD_SVG: &[u8] =
-    b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\">\
-  <rect width=\"8\" height=\"8\" fill=\"rgb(204,204,204)\"/>\
+    b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"320\" height=\"80\">\
+  <defs><pattern id=\"c\" width=\"16\" height=\"16\" patternUnits=\"userSpaceOnUse\">\
+  <rect width=\"16\" height=\"16\" fill=\"rgb(204,204,204)\"/>\
   <rect x=\"8\" width=\"8\" height=\"8\" fill=\"rgb(153,153,153)\"/>\
   <rect y=\"8\" width=\"8\" height=\"8\" fill=\"rgb(153,153,153)\"/>\
-  <rect x=\"8\" y=\"8\" width=\"8\" height=\"8\" fill=\"rgb(204,204,204)\"/>\
+  </pattern></defs>\
+  <rect width=\"320\" height=\"80\" fill=\"url(#c)\"/>\
 </svg>";
-
-/// Static palette names for dropdown
-const PALETTE_NAMES: &[&str] = &["Dark", "Light", "Frosted", "Kiwi"];
 
 /// Renders the settings view for the application
 pub fn settings_view(
     key_size: f32,
     fade_duration: f32,
-    palette: PaletteType,
+    themes: &[(ThemeChoice, Arc<Theme>)],
+    current_theme: &ThemeChoice,
+    theme_message: Option<&str>,
     position: OverlayPosition,
     key_display_mode: KeyDisplayMode,
     icon_style: IconStyle,
@@ -39,51 +44,49 @@ pub fn settings_view(
     show_gestures: bool,
     show_touch: bool,
 ) -> Element<'static, Message> {
-    // Find current selection index
-    let current_index = PaletteType::ALL.iter().position(|p| *p == palette);
-
     // Position selector widget (larger size for better visibility)
     let position_selector = PositionSelector::new(200.0, position, Message::SetPosition);
 
-    // Sample keystroke preview (scales with slider, cap at 250 for window)
-    let preview_size = key_size.min(250.0);
-    let mut sample_keystroke = Keystroke::single("Alt", false);
-    sample_keystroke.count = 2; // Show multiplier in preview
-    let preview = keystroke_widget::<Message>(
-        &sample_keystroke,
-        preview_size,
-        1.0, // fade_duration (unused when fade disabled)
-        palette,
-        false,    // fade_enabled = false for static preview
-        position, // Use current position setting for preview
-        icon_style,
-    );
+    // Theme gallery: two cards per row, each drawn with its own theme
+    let mut theme_grid = widget::Column::new().spacing(8);
+    for pair in themes.chunks(2) {
+        let mut row = widget::Row::new().spacing(8);
+        for (choice, theme) in pair {
+            row = row.push(theme_card(
+                choice,
+                theme,
+                choice == current_theme,
+                icon_style,
+            ));
+        }
+        if pair.len() == 1 {
+            row = row.push(widget::Space::new().width(Length::Fill));
+        }
+        theme_grid = theme_grid.push(row);
+    }
 
-    // Checkerboard background for transparency preview
-    let checkerboard = Svg::new(svg::Handle::from_memory(CHECKERBOARD_SVG))
-        .width(Length::Fill)
-        .height(Length::Fill);
-
-    // Stack preview on top of checkerboard
-    let preview_with_bg = widget::container(cosmic::iced::widget::stack![
-        widget::container(checkerboard)
-            .align_x(cosmic::iced::alignment::Horizontal::Center)
-            .align_y(cosmic::iced::alignment::Vertical::Center),
-        widget::container(preview)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(cosmic::iced::alignment::Horizontal::Center)
-            .align_y(cosmic::iced::alignment::Vertical::Center),
-    ])
-    .width(Length::Fill)
-    .height(Length::Fill);
-
-    // Fixed-size container for preview (tall enough for max preview size)
-    let preview_container = widget::container(preview_with_bg)
-        .width(Length::Fill)
-        .height(Length::Fixed(260.0))
-        .align_x(cosmic::iced::alignment::Horizontal::Center)
-        .align_y(cosmic::iced::alignment::Vertical::Center);
+    let mut theme_section = widget::Column::new()
+        .spacing(8)
+        .push(
+            widget::Row::new()
+                .align_y(cosmic::iced::Alignment::Center)
+                .push(widget::text::body("Theme"))
+                .push(widget::Space::new().width(Length::Fill))
+                .push(
+                    widget::button::link("Open themes folder").on_press(Message::OpenThemesFolder),
+                ),
+        )
+        .push(theme_grid)
+        .push(
+            widget::Row::new()
+                .spacing(8)
+                .push(widget::Space::new().width(Length::Fill))
+                .push(widget::button::standard("Import…").on_press(Message::ImportTheme))
+                .push(widget::button::standard("Export…").on_press(Message::ExportTheme)),
+        );
+    if let Some(message) = theme_message {
+        theme_section = theme_section.push(widget::text::caption(message.to_string()));
+    }
 
     let position_container = widget::container(position_selector)
         .width(Length::Fill)
@@ -199,23 +202,15 @@ pub fn settings_view(
         .push(input_sources_section)
         // Separator
         .push(widget::divider::horizontal::default())
-        // Preview in fixed container (centered)
-        .push(preview_container)
-        // Size slider and Theme dropdown on same row
+        .push(theme_section)
         .push(
             widget::Row::new()
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
-                .push(widget::tooltip(
+                .push(widget::text::body(format!("Size: {:.0}", key_size)))
+                .push(
                     widget::slider(32.0..=160.0, key_size, Message::SetKeySize).width(Length::Fill),
-                    "Size",
-                    widget::tooltip::Position::Bottom,
-                ))
-                .push(widget::tooltip(
-                    widget::dropdown(PALETTE_NAMES, current_index, Message::SetPaletteIndex),
-                    "Theme",
-                    widget::tooltip::Position::Bottom,
-                )),
+                ),
         )
         // Separator
         .push(widget::divider::horizontal::default())
@@ -276,5 +271,58 @@ pub fn settings_view(
                 .align_x(cosmic::iced::alignment::Horizontal::Right)
                 .padding([0, 10, 5, 0]),
         )
+        .into()
+}
+
+/// A clickable theme card showing "Ctrl + C" drawn with that theme
+fn theme_card(
+    choice: &ThemeChoice,
+    theme: &Theme,
+    selected: bool,
+    icon_style: IconStyle,
+) -> Element<'static, Message> {
+    let ctrl = KeyModifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    let sample = keystroke_widget::<Message>(
+        &Keystroke::combination(&ctrl, "C", false),
+        30.0,
+        1.0, // fade_duration (unused when fade disabled)
+        theme,
+        false,
+        OverlayPosition::TopLeft,
+        icon_style,
+    );
+
+    // Checkerboard behind the keys shows how transparent the theme is
+    let checkerboard = Svg::new(svg::Handle::from_memory(CHECKERBOARD_SVG))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .content_fit(cosmic::iced::ContentFit::Cover);
+    let preview = widget::container(cosmic::iced::widget::stack![
+        checkerboard,
+        widget::container(sample)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(cosmic::iced::alignment::Horizontal::Center)
+            .align_y(cosmic::iced::alignment::Vertical::Center),
+    ])
+    .width(Length::Fill)
+    .height(Length::Fixed(64.0))
+    .clip(true);
+
+    let content = widget::Column::new()
+        .spacing(6)
+        .width(Length::Fill)
+        .push(preview)
+        .push(widget::text::body(choice.name().to_string()));
+
+    widget::button::custom(content)
+        .class(cosmic::theme::Button::Image)
+        .selected(selected)
+        .padding(4)
+        .width(Length::Fill)
+        .on_press(Message::SelectTheme(choice.clone()))
         .into()
 }
