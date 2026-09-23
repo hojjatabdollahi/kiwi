@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use crate::config::{IconStyle, OverlayPosition};
 use crate::theme::{self, Fill, Layout, RailStyle, Repeats, Theme};
+use crate::widgets::Reveal;
 
 // Bundled font for keystroke text
 const FONT_BYTES: &[u8] = include_bytes!("../data/GemunuLibre-VariableFont_wght.ttf");
@@ -763,6 +764,8 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     position: OverlayPosition,
     history_count: usize,
     icon_style: IconStyle,
+    // When the last keystroke left the slot for the row (starts the slide)
+    shifted_at: Option<Instant>,
 ) -> Element<'a, M> {
     if theme.layout == Layout::Text {
         return typewriter_line(
@@ -776,63 +779,89 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         );
     }
 
-    // Filter non-expired keystrokes, newest first, limit count
-    let mut visible_keystrokes: Vec<&Keystroke> = keystrokes
+    // The newest keystroke sits in the slot at the edge, where it builds up while
+    // held; older ones form the row beside it
+    let visible: Vec<&Keystroke> = keystrokes
         .iter()
-        .rev()
         .filter(|k| !k.is_expired(fade_duration))
-        .take(history_count)
         .collect();
-
-    // Reverse so oldest is first (left side for left-aligned, right side for right-aligned)
-    visible_keystrokes.reverse();
+    let Some((slot, older)) = visible.split_last() else {
+        return widget::Space::new().into();
+    };
 
     // The rail fades out along with its newest key
-    let rail_opacity = visible_keystrokes
+    let rail_opacity = visible
         .iter()
         .map(|k| k.opacity(fade_duration))
         .fold(0.0, f32::max);
 
-    let children: Vec<Element<'a, M>> = visible_keystrokes
-        .into_iter()
-        .map(|k| {
-            keystroke_widget(
-                k,
-                key_size,
-                k.opacity(fade_duration),
-                theme,
-                position,
-                icon_style,
-            )
-        })
-        .collect();
-
-    // Determine if we need to reverse the order for right-aligned positions
-    // (newest should appear on the right edge)
-    let is_right_aligned = matches!(
+    // Right-side and centered positions keep the slot on the right, and the row
+    // grows leftward; left-side positions mirror that
+    let slot_on_right = matches!(
         position,
         OverlayPosition::TopRight
             | OverlayPosition::BottomRight
             | OverlayPosition::TopCenter
             | OverlayPosition::BottomCenter
     );
+    let gap = theme.key.gap;
+    let entering = slide_progress(shifted_at);
+    let row_slots = history_count.saturating_sub(1);
+
+    // A key at `width` (0-1) of its size, sliding toward or away from the slot side.
+    // Row keys carry their gap on the slot side, so it slides with them.
+    let key = |k: &Keystroke, width: f32, dim: f32, gap: f32| -> Element<'a, M> {
+        let opacity = k.opacity(fade_duration) * dim;
+        let widget = keystroke_widget(k, key_size, opacity, theme, position, icon_style);
+        let padding = if slot_on_right {
+            [0.0, gap, 0.0, 0.0]
+        } else {
+            [0.0, 0.0, 0.0, gap]
+        };
+        let widget: Element<'a, M> = widget::container(widget).padding(padding).into();
+        if width >= 1.0 {
+            widget
+        } else {
+            Reveal::new(widget, width, slot_on_right).into()
+        }
+    };
+
+    // Row keys, newest first. The newest slides out of the slot; when the row is
+    // full, the oldest shrinks away at the far end at the same time; keys about to
+    // expire shrink away too.
+    let mut row: Vec<Element<'a, M>> = Vec::new();
+    for (i, k) in older.iter().rev().enumerate() {
+        let (width, dim) = match i {
+            _ if i > row_slots => break,
+            _ if i == row_slots => (1.0 - entering, 1.0 - entering),
+            0 => (entering, 1.0),
+            _ => (1.0, 1.0),
+        };
+        let width = width.min(leaving(k, fade_duration));
+        if width <= 0.0 {
+            continue;
+        }
+        row.push(key(k, width, dim, gap));
+    }
+    let slot = key(slot, leaving(slot, fade_duration), 1.0, 0.0);
+
+    // The slot is set a little apart from the row
+    let separation: Element<'a, M> = widget::Space::new()
+        .width(Length::Fixed(gap + key_size * 0.15))
+        .into();
+    let ordered_children: Vec<Element<'a, M>> = if slot_on_right {
+        row.into_iter().rev().chain([separation, slot]).collect()
+    } else {
+        [slot, separation].into_iter().chain(row).collect()
+    };
 
     let is_bottom = matches!(
         position,
         OverlayPosition::BottomLeft | OverlayPosition::BottomRight | OverlayPosition::BottomCenter
     );
 
-    // For right-aligned: oldest on left, newest on right (natural order after reverse)
-    // For left-aligned: oldest on right, newest on left (need to reverse display)
-    let ordered_children = if is_right_aligned {
-        children
-    } else {
-        children.into_iter().rev().collect()
-    };
-
     let Some(rail) = theme.rail else {
         return widget::row::with_children(ordered_children)
-            .spacing(theme.key.gap)
             .align_y(if is_bottom {
                 iced::Alignment::End
             } else {
@@ -875,12 +904,28 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
 
     on_rail(
         widget::row::with_children(children)
-            .spacing(theme.key.gap)
             .align_y(iced::Alignment::Center)
             .into(),
         &rail,
         rail_opacity,
     )
+}
+
+/// How long keys take to slide when one leaves the slot or the row
+pub const SLIDE_SECS: f32 = 0.22;
+
+/// How far the newest row key has slid out of the slot, eased (1.0 when done)
+fn slide_progress(shifted_at: Option<Instant>) -> f32 {
+    let t = shifted_at.map_or(1.0, |at| (at.elapsed().as_secs_f32() / SLIDE_SECS).min(1.0));
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// A key's width while it expires: full, then shrinking away over its last moments
+fn leaving(keystroke: &Keystroke, fade_duration: f32) -> f32 {
+    if keystroke.pressed {
+        return 1.0;
+    }
+    ((fade_duration - keystroke.age_secs()) / SLIDE_SECS).clamp(0.0, 1.0)
 }
 
 /// Put `content` on the theme's rail, faded to `opacity`

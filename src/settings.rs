@@ -292,6 +292,7 @@ fn theme_card(
         OverlayPosition::TopRight,
         keys.len(),
         icon_style,
+        None,
     );
 
     // Checkerboard behind the keys shows how transparent the theme is

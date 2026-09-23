@@ -398,12 +398,12 @@ impl cosmic::Application for KiwiApp {
             time::every(Duration::from_millis(50)).map(|_| Message::Tick),
         ];
 
-        // Touch markers track the finger, so they need a smoother refresh than the
-        // 50ms keystroke tick - only while contacts are actually on screen.
+        // Touch markers track the finger and keys slide, so both need a smoother
+        // refresh than the 50ms tick, but only while it's happening
         if self
             .shared_state
             .lock()
-            .map(|s| s.has_touches())
+            .map(|s| s.has_touches() || s.is_sliding())
             .unwrap_or(false)
         {
             subs.push(time::every(Duration::from_millis(16)).map(|_| Message::Tick));

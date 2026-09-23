@@ -73,6 +73,10 @@ pub struct SharedState {
     pub preview: Option<Preview>,
     /// How far the keys have been dragged from their spot, while arranging
     pub drag_offset: Option<cosmic::iced::Vector>,
+    /// How many keys were beside the slot last frame, to notice one joining
+    row_len: usize,
+    /// When a key last left the slot for the row, which starts the slide
+    shifted_at: Option<std::time::Instant>,
     /// Key display mode (typed character vs physical key)
     pub key_display_mode: crate::config::KeyDisplayMode,
     /// Icon style (symbols vs text)
@@ -149,6 +153,20 @@ impl SharedState {
         !self.touches.is_empty()
     }
 
+    /// True while keys are sliding: one just left the slot, or one is shrinking
+    /// away as it expires. The overlay then needs frequent redraws.
+    pub fn is_sliding(&self) -> bool {
+        let slide = crate::keystroke::SLIDE_SECS;
+        let expiring = |k: &Keystroke| {
+            let left = self.fade_duration - k.age_secs();
+            !k.pressed && (0.0..slide).contains(&left)
+        };
+        self.shifted_at
+            .is_some_and(|at| at.elapsed().as_secs_f32() < slide)
+            || self.history.iter().any(expiring)
+            || self.preview.is_some()
+    }
+
     /// Record a new contact (or restart one that reuses a slot still fading out)
     pub fn touch_down(&mut self, slot: u32, x: f32, y: f32) {
         self.touches.retain(|t| t.slot != slot);
@@ -198,6 +216,8 @@ impl Default for SharedState {
             arranging: false,
             preview: None,
             drag_offset: None,
+            row_len: 0,
+            shifted_at: None,
             key_display_mode: crate::config::KeyDisplayMode::default(),
             icon_style: IconStyle::default(),
             history_count: 5,
@@ -374,10 +394,11 @@ struct Snapshot {
     touches: Vec<TouchPoint>,
     arranging: bool,
     drag_offset: cosmic::iced::Vector,
+    shifted_at: Option<std::time::Instant>,
 }
 
 impl Snapshot {
-    fn take(s: &SharedState, show_touches: bool) -> Self {
+    fn take(s: &mut SharedState, show_touches: bool) -> Self {
         let theme = match &s.preview {
             Some(preview) if !s.arranging => preview.theme.clone(),
             _ => s.theme.clone(),
@@ -391,6 +412,18 @@ impl Snapshot {
         } else {
             Vec::new()
         };
+        // A key joining the row (the slot moved on to a new keystroke) starts the slide
+        let fade_duration = s.fade_duration;
+        let row_len = keystrokes
+            .iter()
+            .filter(|k| !k.is_expired(fade_duration))
+            .count()
+            .saturating_sub(1);
+        if row_len > s.row_len {
+            s.shifted_at = Some(std::time::Instant::now());
+        }
+        s.row_len = row_len;
+
         let touches = if s.enabled && s.show_touch && show_touches {
             s.touches.clone()
         } else {
@@ -409,6 +442,7 @@ impl Snapshot {
             touches,
             arranging: s.arranging,
             drag_offset: s.drag_offset.unwrap_or_default(),
+            shifted_at: s.shifted_at,
         }
     }
 }
@@ -440,9 +474,18 @@ fn live_keystrokes(s: &SharedState) -> Vec<Keystroke> {
         } else {
             Keystroke::single(key.clone(), true)
         };
-        display.push(current);
-    } else if s.modifiers.any() {
-        // Only modifiers pressed (no key, no mouse)
+        // Pressing the same key again quickly counts up in the slot (it merges on
+        // release) instead of pushing the last one into the row
+        match display.last_mut() {
+            Some(last) if last.can_merge(&current) => {
+                last.pressed = true;
+                last.count += 1;
+            }
+            _ => display.push(current),
+        }
+    } else if s.modifiers.any() && !s.key_pressed_with_modifiers {
+        // Only modifiers pressed (no key, no mouse). Once a key was pressed with
+        // them, the finished combination stays in the slot instead.
         if let Some(mods_keystroke) = Keystroke::from_modifiers(&s.modifiers, true) {
             display.push(mods_keystroke);
         }
@@ -536,7 +579,10 @@ pub fn view_overlay(
 ) -> cosmic::Element<'static, Message> {
     use cosmic::iced::alignment::{Horizontal, Vertical};
 
-    let Ok(frame) = state.lock().map(|s| Snapshot::take(&s, show_touches)) else {
+    let Ok(frame) = state
+        .lock()
+        .map(|mut s| Snapshot::take(&mut s, show_touches))
+    else {
         return cosmic::widget::Space::new().into();
     };
 
@@ -561,6 +607,7 @@ pub fn view_overlay(
             frame.position,
             frame.history_count as usize,
             frame.icon_style,
+            frame.shifted_at,
         )
     };
 
@@ -1010,6 +1057,51 @@ fn arrange_toolbar(frame: &Snapshot) -> cosmic::Element<'static, Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_joining_the_row_starts_the_slide() {
+        let mut state = SharedState::default();
+        state.history.push(Keystroke::single("a", false));
+        Snapshot::take(&mut state, false);
+        // One key: it's in the slot, nothing has slid yet
+        assert!(state.shifted_at.is_none());
+
+        // Pressing the next key pushes "a" out of the slot into the row
+        state.current_key = Some(("b".into(), KeyModifiers::default()));
+        let frame = Snapshot::take(&mut state, false);
+        assert_eq!(frame.keystrokes.len(), 2);
+        assert!(state.shifted_at.is_some());
+
+        // Releasing "b" moves it from held to history: same keys on screen, no new slide
+        state.shifted_at = None;
+        state.current_key = None;
+        state.history.push(Keystroke::single("b", false));
+        Snapshot::take(&mut state, false);
+        assert!(state.shifted_at.is_none());
+    }
+
+    #[test]
+    fn a_quick_repeat_counts_up_in_the_slot() {
+        let mut state = SharedState::default();
+        state.history.push(Keystroke::single("a", false));
+        state.current_key = Some(("a".into(), KeyModifiers::default()));
+        let keys = live_keystrokes(&state);
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].pressed);
+        assert_eq!(keys[0].count, 2);
+    }
+
+    #[test]
+    fn held_modifiers_after_a_combination_keep_it_in_the_slot() {
+        let mut state = SharedState::default();
+        state.modifiers.ctrl = true;
+        state.history.push(Keystroke::single("C", false));
+        // Ctrl is still held, but a key was already pressed with it
+        state.key_pressed_with_modifiers = true;
+        assert_eq!(live_keystrokes(&state).len(), 1);
+        state.key_pressed_with_modifiers = false;
+        assert_eq!(live_keystrokes(&state).len(), 2);
+    }
 
     #[test]
     fn snap_spots_fit_and_dont_overlap() {

@@ -183,3 +183,99 @@ impl<M> canvas::Program<M, cosmic::Theme> for RoundSwatch {
         vec![frame.into_geometry()]
     }
 }
+
+/// Shows a fraction of its content's width, clipped, keeping one side. Growing
+/// the fraction from 0 to 1 slides the content in from that side and pushes its
+/// neighbors along; shrinking it slides the content out.
+pub struct Reveal<'a, M> {
+    content: Element<'a, M>,
+    fraction: f32,
+    keep_right: bool,
+}
+
+impl<'a, M> Reveal<'a, M> {
+    /// `fraction` of the width stays visible; `keep_right` keeps the right side (else the left)
+    pub fn new(content: impl Into<Element<'a, M>>, fraction: f32, keep_right: bool) -> Self {
+        Self {
+            content: content.into(),
+            fraction: fraction.clamp(0.0, 1.0),
+            keep_right,
+        }
+    }
+}
+
+impl<M> cosmic::widget::Widget<M, cosmic::Theme, cosmic::Renderer> for Reveal<'_, M> {
+    fn size(&self) -> cosmic::iced::Size<Length> {
+        cosmic::iced::Size::new(Length::Shrink, Length::Shrink)
+    }
+
+    fn children(&self) -> Vec<cosmic::iced::core::widget::Tree> {
+        vec![cosmic::iced::core::widget::Tree::new(&self.content)]
+    }
+
+    fn diff(&mut self, tree: &mut cosmic::iced::core::widget::Tree) {
+        tree.diff_children(std::slice::from_mut(&mut self.content));
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut cosmic::iced::core::widget::Tree,
+        renderer: &cosmic::Renderer,
+        limits: &cosmic::iced::core::layout::Limits,
+    ) -> cosmic::iced::core::layout::Node {
+        use cosmic::iced::core::layout::{Limits, Node};
+        use cosmic::iced::{Point, Size};
+
+        // The content gets its natural width, however little of it shows
+        let unbounded = Limits::new(Size::ZERO, Size::new(f32::INFINITY, limits.max().height));
+        let content =
+            self.content
+                .as_widget_mut()
+                .layout(&mut tree.children[0], renderer, &unbounded);
+        let full = content.size();
+        let width = full.width * self.fraction;
+        let x = if self.keep_right {
+            width - full.width
+        } else {
+            0.0
+        };
+        Node::with_children(
+            Size::new(width, full.height),
+            vec![content.move_to(Point::new(x, 0.0))],
+        )
+    }
+
+    fn draw(
+        &self,
+        tree: &cosmic::iced::core::widget::Tree,
+        renderer: &mut cosmic::Renderer,
+        theme: &cosmic::Theme,
+        style: &cosmic::iced::core::renderer::Style,
+        layout: cosmic::iced::core::Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        use cosmic::iced::core::Renderer as _;
+
+        let Some(content) = layout.children().next() else {
+            return;
+        };
+        renderer.with_layer(layout.bounds(), |renderer| {
+            self.content.as_widget().draw(
+                &tree.children[0],
+                renderer,
+                theme,
+                style,
+                content,
+                cursor,
+                viewport,
+            );
+        });
+    }
+}
+
+impl<'a, M: 'a> From<Reveal<'a, M>> for Element<'a, M> {
+    fn from(reveal: Reveal<'a, M>) -> Self {
+        Element::new(reveal)
+    }
+}

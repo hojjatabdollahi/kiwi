@@ -963,6 +963,7 @@ fn preview<'a>(theme: &Theme, icon_style: IconStyle) -> Element<'a, Message> {
         OverlayPosition::TopRight,
         keys.len(),
         icon_style,
+        None,
     );
     // Checkerboard behind the keys shows how transparent the theme is
     let checkerboard = Svg::new(svg::Handle::from_memory(CHECKERBOARD_SVG))
