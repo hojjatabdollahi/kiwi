@@ -455,6 +455,10 @@ impl cosmic::Application for KiwiApp {
                 let settings = window::Settings {
                     size: Size::new(440.0, 640.0),
                     decorations: false, // libcosmic provides its own header bar
+                    // The window is drawn translucent (see `style`, and frosted glass).
+                    // An opaque window leaves those pixels undefined, so the
+                    // background flickers between old frames.
+                    transparent: true,
                     ..Default::default()
                 };
                 let (id, task) = cosmic::iced::window::open(settings);

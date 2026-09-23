@@ -292,7 +292,7 @@ pub fn create_layer_surface_for_output(
         })),
     );
 
-    cosmic::task::message(cosmic::Action::Cosmic(cosmic::app::Action::Surface(action)))
+    cosmic::surface::surface_task(action)
 }
 
 /// Destroy a layer surface
