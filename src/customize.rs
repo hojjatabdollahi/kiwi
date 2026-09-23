@@ -174,8 +174,12 @@ pub enum CustomizeMessage {
     ClearColor(ColorField),
     Nudge(NumberField, f32),
     RepeatsTab(segmented_button::Entity),
-    /// Pick a font from `font_options` (0 is Kiwi's own)
-    SetFont(usize),
+    /// Open the font list, or close it
+    ToggleFontPicker,
+    /// Text typed in the font list's search field
+    FontQuery(String),
+    /// Use a font family (`None` is Kiwi's own)
+    PickFont(Option<String>),
     SetRecolorIcons(bool),
     ChooseIcons,
     IconsChosen(PathBuf),
@@ -198,15 +202,14 @@ const REPEATS: &[(&str, Repeats)] = &[
     ("Hide", Repeats::Hidden),
 ];
 
-/// The font dropdown's choices: Kiwi's own font, then every installed family
-fn font_options() -> &'static [String] {
-    static OPTIONS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    OPTIONS.get_or_init(|| {
-        std::iter::once("Kiwi (Gemunu Libre)".to_string())
-            .chain(theme::font_families().iter().cloned())
-            .collect()
-    })
+fn font_search_id() -> widget::Id {
+    widget::Id::new("kiwi-font-search")
 }
+
+/// How Kiwi's own font is listed
+const KIWI_FONT: &str = "Kiwi (Gemunu Libre)";
+/// The font list shows at most this many matches, so a short query stays quick
+const MAX_FONT_MATCHES: usize = 80;
 
 /// The theme being edited
 pub struct Draft {
@@ -225,6 +228,8 @@ pub struct Draft {
     /// Whether the footer is asking for a name to save under
     naming: bool,
     show_missing_icons: bool,
+    /// The font list's search text, while the list is open
+    font_query: Option<String>,
     layout_model: segmented_button::SingleSelectModel,
     repeats_model: segmented_button::SingleSelectModel,
 }
@@ -247,6 +252,7 @@ impl Draft {
             picking: None,
             save_name,
             show_missing_icons: false,
+            font_query: None,
         }
     }
 
@@ -435,11 +441,21 @@ impl KiwiApp {
                 };
                 draft.theme.key.repeats = repeats;
             }
-            M::SetFont(index) => {
-                draft.theme.font = match index {
-                    0 => None,
-                    i => font_options().get(i).cloned(),
+            M::ToggleFontPicker => {
+                draft.font_query = match draft.font_query {
+                    Some(_) => None,
+                    None => Some(String::new()),
                 };
+                // Start typing right away
+                return widget::text_input::focus(font_search_id());
+            }
+            M::FontQuery(query) => {
+                draft.font_query = Some(query);
+                return Task::none();
+            }
+            M::PickFont(font) => {
+                draft.theme.font = font;
+                draft.font_query = None;
             }
             M::SetRecolorIcons(recolor) => draft.theme.recolor_icons = recolor,
             M::ChooseIcons => {
@@ -714,17 +730,14 @@ pub fn view<'a>(
     keys = add_color(keys, "Background", ColorField::KeyBackground);
     keys = add_color(keys, "While held", ColorField::KeyPressed);
     keys = add_color(keys, "Text", ColorField::KeyText);
-    let font_index = theme
-        .font
-        .as_ref()
-        .and_then(|font| font_options().iter().position(|f| f == font))
-        .unwrap_or(0);
     keys = keys.add(settings::item(
         "Font",
-        widget::dropdown(font_options(), Some(font_index), move |i| {
-            Message::Customize(CustomizeMessage::SetFont(i))
-        }),
+        widget::button::standard(format!("{} ▾", theme.font.as_deref().unwrap_or(KIWI_FONT)))
+            .on_press(send(CustomizeMessage::ToggleFontPicker)),
     ));
+    if let Some(query) = &draft.font_query {
+        keys = keys.add(font_picker(query, theme.font.as_deref()));
+    }
     keys = add_border(keys, ColorField::KeyBorder, NumberField::KeyBorderWidth);
     let keys = keys
         .add(settings::item(
@@ -857,6 +870,53 @@ pub fn view<'a>(
     };
 
     (content.into(), footer)
+}
+
+/// A search field over the installed fonts, each listed in its own font
+fn font_picker<'a>(query: &'a str, current: Option<&str>) -> Element<'a, Message> {
+    let needle = query.trim().to_lowercase();
+    let matches = |name: &str| name.to_lowercase().contains(&needle);
+
+    let row = |label: &str, font: cosmic::iced::Font, value: Option<String>| {
+        let selected = value.as_deref() == current;
+        widget::button::custom(widget::text::body(label.to_string()).font(font))
+            .class(cosmic::theme::Button::MenuItem)
+            .selected(selected)
+            .width(Length::Fill)
+            .on_press(Message::Customize(CustomizeMessage::PickFont(value)))
+    };
+    let mut list = widget::Column::new().spacing(2);
+    if matches(KIWI_FONT) {
+        list = list.push(row(KIWI_FONT, Theme::default().font(), None));
+    }
+    let found: Vec<&String> = theme::font_families()
+        .iter()
+        .filter(|name| matches(name))
+        .collect();
+    for name in found.iter().take(MAX_FONT_MATCHES) {
+        list = list.push(row(name, theme::font_named(name), Some(name.to_string())));
+    }
+    if found.len() > MAX_FONT_MATCHES {
+        list = list.push(widget::text::caption(format!(
+            "{} more; type to narrow the list",
+            found.len() - MAX_FONT_MATCHES
+        )));
+    } else if found.is_empty() && !matches(KIWI_FONT) {
+        list = list.push(widget::text::caption("No installed font matches"));
+    }
+
+    widget::Column::new()
+        .spacing(8)
+        .push(
+            widget::search_input("Search fonts", query)
+                .id(font_search_id())
+                .on_input(|q| Message::Customize(CustomizeMessage::FontQuery(q)))
+                .on_clear(Message::Customize(CustomizeMessage::FontQuery(
+                    String::new(),
+                ))),
+        )
+        .push(widget::scrollable(list).height(Length::Fixed(220.0)))
+        .into()
 }
 
 /// Keys and rail drawn with the theme being edited, including a held key and a repeat

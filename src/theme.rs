@@ -432,6 +432,14 @@ fn intern(name: &str) -> &'static str {
     leaked
 }
 
+/// A regular-weight font by family name, e.g. to show a font's name in that font
+pub fn font_named(family: &str) -> cosmic::iced::Font {
+    cosmic::iced::Font {
+        family: cosmic::iced::font::Family::Name(intern(family)),
+        ..Default::default()
+    }
+}
+
 /// The font families installed on the system, sorted, read once
 pub fn font_families() -> &'static [String] {
     static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
