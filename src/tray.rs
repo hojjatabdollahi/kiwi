@@ -174,7 +174,7 @@ impl Tray for KiwiTray {
                 ..Default::default()
             }),
             MenuItem::Standard(StandardItem {
-                label: "Arrange on screen".to_string(),
+                label: "Adjust on screen".to_string(),
                 activate: Box::new(move |_| {
                     log::info!("Menu: Arrange clicked");
                     if let Err(e) = tx_arrange.send(TrayAction::Arrange) {

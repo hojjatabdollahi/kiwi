@@ -4,8 +4,7 @@ use cosmic::iced::{Alignment, Color, Length};
 use cosmic::prelude::*;
 use cosmic::widget::{self, scrollable, segmented_button, settings, svg, Svg};
 
-use crate::config::{IconStyle, KeyDisplayMode, OverlayPosition, APP_VERSION};
-use crate::customize::CustomizeMessage;
+use crate::config::{IconStyle, KeyDisplayMode, OverlayPosition, PreviewBackground, APP_VERSION};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke};
 use crate::theme::{Layout, Theme, ThemeChoice};
 use crate::{KiwiApp, Message};
@@ -78,7 +77,14 @@ pub fn settings_view(app: &KiwiApp) -> Element<'_, Message> {
             } else {
                 choice.name().to_string()
             };
-            theme_card(choice, name, theme, selected, config.icon_style)
+            theme_card(
+                choice,
+                name,
+                theme,
+                selected,
+                config.icon_style,
+                config.preview_background,
+            )
         })
         .collect();
     cards.push(import_card());
@@ -96,31 +102,44 @@ pub fn settings_view(app: &KiwiApp) -> Element<'_, Message> {
         .spacing(8)
         .push(
             widget::Row::new()
+                .spacing(8)
                 .align_y(Alignment::Center)
                 .push(widget::text::heading("Theme"))
                 .push(widget::Space::new().width(Length::Fill))
-                .push(
-                    widget::button::link("Open themes folder").on_press(Message::OpenThemesFolder),
-                ),
+                // What the previews are drawn on; translucent themes need a backdrop
+                .push(preview_background_toggle(config.preview_background)),
         )
         .push(theme_grid)
         .push(
             widget::Row::new()
                 .push(widget::Space::new().width(Length::Fill))
                 .push(
-                    widget::button::standard(format!("Customize {current_name}"))
-                        .on_press(Message::Customize(CustomizeMessage::Open)),
+                    widget::button::link("Open themes folder").on_press(Message::OpenThemesFolder),
                 ),
         );
     if let Some(message) = &app.theme_message {
         theme_section = theme_section.push(widget::text::caption(message.as_str()));
     }
 
-    let placement = settings::section().title("Placement").add(
+    // Everything that's set on screen, spelled out so it's clear what "adjust" covers
+    let length = match app.shared_state.lock().map(|s| s.theme.layout) {
+        Ok(Layout::Text) => format!(
+            "{:.0} px long",
+            config.line_width.unwrap_or_else(|| app
+                .shared_state
+                .lock()
+                .map_or(460.0, |s| s.theme.line_width))
+        ),
+        _ => format!("{} keys long", config.history_count),
+    };
+    let placement = settings::section().title("Position and size").add(
         settings::item::builder(config.position.name())
-            .description(format!("{:.0} px from the edge", config.margin))
+            .description(format!(
+                "{:.0} px from the edge, {:.0} px keys, {length}",
+                config.margin, config.key_size
+            ))
             .control(
-                widget::button::suggested("Arrange on screen").on_press(Message::StartArranging),
+                widget::button::suggested("Adjust on screen").on_press(Message::StartArranging),
             ),
     );
 
@@ -240,33 +259,126 @@ pub fn settings_view(app: &KiwiApp) -> Element<'_, Message> {
         .into()
 }
 
-/// A theme card's frame: the image-button style, outlined in the accent color when selected
+/// A theme card's frame: a card with a thin border, outlined in the accent color
+/// when selected and shaded on hover. `dashed` leaves the border off, for a
+/// dashed outline drawn on top instead.
 fn card<'a>(
     content: impl Into<Element<'a, Message>>,
     selected: bool,
+    dashed: bool,
 ) -> widget::Button<'a, Message> {
+    let style = move |hovered: bool, theme: &cosmic::Theme| {
+        let cosmic = theme.cosmic();
+        let component = &theme.current_container().component;
+        let mut style = widget::button::Style::new();
+        style.border_radius = cosmic.corner_radii.radius_s.into();
+        style.background = match (dashed, hovered) {
+            (_, true) => Some(Color::from(component.hover).into()),
+            (false, false) => Some(Color::from(component.base).into()),
+            (true, false) => None,
+        };
+        style.border_width = match (selected, dashed) {
+            (true, _) => 2.0,
+            (false, false) => 1.0,
+            (false, true) => 0.0,
+        };
+        style.border_color = if selected {
+            Color::from(cosmic.accent_color())
+        } else {
+            Color::from(component.divider)
+        };
+        style.text_color = Some(Color::from(component.on));
+        style.icon_color = Some(Color::from(component.on));
+        style
+    };
     widget::button::custom(content)
-        .class(cosmic::theme::Button::Image)
-        .selected(selected)
+        .class(cosmic::theme::Button::Custom {
+            active: Box::new(move |_, theme| style(false, theme)),
+            disabled: Box::new(move |theme| style(false, theme)),
+            hovered: Box::new(move |_, theme| style(true, theme)),
+            pressed: Box::new(move |_, theme| style(true, theme)),
+        })
         .padding(4)
         .width(Length::Fill)
 }
 
-/// Card text in the normal text color (the image-button style would make it the accent)
-fn card_label<'a>(
-    label: impl Into<std::borrow::Cow<'a, str>> + 'a,
-) -> widget::Text<'a, cosmic::Theme> {
-    let color = Color::from(cosmic::theme::active().cosmic().on_bg_color());
-    widget::text::body(label).class(cosmic::theme::Text::Color(color))
+/// A checkerboard icon, drawn in the icon color
+const CHECKERED_ICON: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\">\
+<path fill=\"currentColor\" d=\"M2 2h6v6H2zM8 8h6v6H8z\"/>\
+<path fill=\"currentColor\" opacity=\".35\" d=\"M8 2h6v6H8zM2 8h6v6H2z\"/></svg>";
+
+/// One button that switches what the previews are drawn on. Its icon shows the
+/// current background, and the tooltip says what a click switches to.
+fn preview_background_toggle<'a>(current: PreviewBackground) -> Element<'a, Message> {
+    let (icon, tip) = match current {
+        PreviewBackground::Desktop => (
+            widget::icon::from_name("image-x-generic-symbolic").into(),
+            "Previews are on a desktop background. Click for a checkerboard, to see transparency.",
+        ),
+        PreviewBackground::Checkered => (
+            widget::icon::from_svg_bytes(CHECKERED_ICON).symbolic(true),
+            "Previews are on a checkerboard. Click for a desktop background.",
+        ),
+    };
+    widget::tooltip(
+        widget::button::icon(icon).on_press(Message::TogglePreviewBackground),
+        tip,
+        widget::tooltip::Position::Bottom,
+    )
+    .into()
 }
 
-/// A clickable theme card showing a short sample drawn with that theme, and a preview button
+/// What theme previews are drawn on
+pub(crate) fn preview_backdrop<'a>(background: PreviewBackground) -> Element<'a, Message> {
+    use cosmic::iced::gradient::Linear;
+
+    // One gradient layer filling the preview
+    let layer = |gradient: Linear| {
+        widget::container(widget::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .class(cosmic::theme::Container::custom(move |_| {
+                widget::container::Style {
+                    background: Some(cosmic::iced::Background::Gradient(gradient.into())),
+                    ..Default::default()
+                }
+            }))
+    };
+    match background {
+        // Like a wallpaper: deep blue into mauve, with a warm glow in one corner
+        PreviewBackground::Desktop => cosmic::iced::widget::stack![
+            layer(
+                Linear::new(cosmic::iced::Radians(2.9))
+                    .add_stop(0.0, Color::from_rgb8(0x22, 0x38, 0x4a))
+                    .add_stop(0.55, Color::from_rgb8(0x4b, 0x47, 0x64))
+                    .add_stop(1.0, Color::from_rgb8(0x8b, 0x6a, 0x78)),
+            ),
+            layer(
+                Linear::new(cosmic::iced::Radians(2.2))
+                    .add_stop(0.0, Color::from_rgba8(0xd9, 0x9a, 0x6c, 0.0))
+                    .add_stop(0.6, Color::from_rgba8(0xd9, 0x9a, 0x6c, 0.0))
+                    .add_stop(1.0, Color::from_rgba8(0xd9, 0x9a, 0x6c, 0.55)),
+            ),
+        ]
+        .into(),
+        // Shows exactly how transparent the theme is
+        PreviewBackground::Checkered => Svg::new(svg::Handle::from_memory(CHECKERBOARD_SVG))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .content_fit(cosmic::iced::ContentFit::Cover)
+            .into(),
+    }
+}
+
+/// A clickable theme card showing a short sample drawn with that theme, with
+/// buttons to customize it and to preview it on screen
 fn theme_card(
     choice: &ThemeChoice,
     name: String,
     theme: &Theme,
     selected: bool,
     icon_style: IconStyle,
+    background: PreviewBackground,
 ) -> Element<'static, Message> {
     let ctrl = KeyModifiers {
         ctrl: true,
@@ -295,13 +407,8 @@ fn theme_card(
         crate::keystroke::Motion::default(),
     );
 
-    // Checkerboard behind the keys shows how transparent the theme is
-    let checkerboard = Svg::new(svg::Handle::from_memory(CHECKERBOARD_SVG))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .content_fit(cosmic::iced::ContentFit::Cover);
     let preview = widget::container(cosmic::iced::widget::stack![
-        checkerboard,
+        preview_backdrop(background),
         widget::container(sample)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -312,17 +419,28 @@ fn theme_card(
     .height(Length::Fixed(CARD_PREVIEW_HEIGHT))
     .clip(true);
 
-    let play = widget::tooltip(
-        widget::button::icon(widget::icon::from_name("media-playback-start-symbolic"))
-            .extra_small()
-            .on_press(Message::PreviewTheme(choice.clone())),
-        "Preview",
-        widget::tooltip::Position::Top,
-    );
+    let action = |icon: &'static str, tip: &'static str, message: Message| {
+        widget::tooltip(
+            widget::button::icon(widget::icon::from_name(icon))
+                .extra_small()
+                .on_press(message),
+            tip,
+            widget::tooltip::Position::Top,
+        )
+    };
     let label = widget::Row::new()
         .align_y(Alignment::Center)
-        .push(card_label(name).width(Length::Fill))
-        .push(play);
+        .push(widget::text::body(name).width(Length::Fill))
+        .push(action(
+            "edit-symbolic",
+            "Customize",
+            Message::CustomizeTheme(choice.clone()),
+        ))
+        .push(action(
+            "media-playback-start-symbolic",
+            "Preview",
+            Message::PreviewTheme(choice.clone()),
+        ));
 
     card(
         widget::Column::new()
@@ -331,6 +449,7 @@ fn theme_card(
             .push(preview)
             .push(label),
         selected,
+        false,
     )
     .on_press(Message::SelectTheme(choice.clone()))
     .into()
@@ -342,7 +461,7 @@ fn import_card() -> Element<'static, Message> {
         widget::Column::new()
             .spacing(2)
             .align_x(Alignment::Center)
-            .push(card_label("Import a theme…"))
+            .push(widget::text::body("Import a theme…"))
             .push(widget::text::caption(".zip file")),
     )
     .width(Length::Fill)
@@ -351,5 +470,11 @@ fn import_card() -> Element<'static, Message> {
     .align_x(cosmic::iced::alignment::Horizontal::Center)
     .align_y(cosmic::iced::alignment::Vertical::Center);
 
-    card(content, false).on_press(Message::ImportTheme).into()
+    // A dashed outline marks it as a place to add something
+    let radius = cosmic::theme::active().cosmic().corner_radii.radius_s[0];
+    cosmic::iced::widget::stack![
+        card(content, false, true).on_press(Message::ImportTheme),
+        crate::widgets::dashed_outline(radius),
+    ]
+    .into()
 }

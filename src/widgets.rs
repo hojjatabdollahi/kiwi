@@ -307,3 +307,51 @@ impl<'a, M: 'a> From<Reveal<'a, M>> for Element<'a, M> {
         Element::new(reveal)
     }
 }
+
+/// A dashed rounded outline filling its space, for "add something here" spots.
+/// Stack it over the content; it doesn't take any input.
+pub fn dashed_outline<'a, M: 'a>(radius: f32) -> Element<'a, M> {
+    widget::Canvas::new(DashedOutline { radius })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+struct DashedOutline {
+    radius: f32,
+}
+
+impl<M> canvas::Program<M, cosmic::Theme> for DashedOutline {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &cosmic::Renderer,
+        theme: &cosmic::Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        use cosmic::iced::{Point, Size};
+        use cosmic::widget::canvas::LineDash;
+
+        let mut frame = Frame::new(renderer, bounds.size());
+        let outline = Path::rounded_rectangle(
+            Point::new(1.0, 1.0),
+            Size::new(bounds.width - 2.0, bounds.height - 2.0),
+            self.radius.into(),
+        );
+        let color = Color::from(theme.current_container().component.divider);
+        frame.stroke(
+            &outline,
+            Stroke {
+                line_dash: LineDash {
+                    segments: &[6.0, 4.0],
+                    offset: 0,
+                },
+                ..Stroke::default().with_color(color).with_width(1.5)
+            },
+        );
+        vec![frame.into_geometry()]
+    }
+}

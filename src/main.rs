@@ -142,6 +142,10 @@ pub enum Message {
     SetPosition(OverlayPosition),
     DisplayModeTab(widget::segmented_button::Entity),
     IconStyleTab(widget::segmented_button::Entity),
+    /// Switch what the theme previews are drawn on
+    TogglePreviewBackground,
+    /// Open the Customize drawer for a theme, selecting it first
+    CustomizeTheme(ThemeChoice),
     // Arrange mode
     StartArranging,
     /// The keys being dragged by this much while arranging (`None` when let go)
@@ -303,8 +307,12 @@ impl cosmic::Application for KiwiApp {
             ),
             ContextPage::Customize => {
                 let draft = self.draft.as_ref()?;
-                let (content, footer) =
-                    customize::view(draft, self.theme_message.as_deref(), self.config.icon_style);
+                let (content, footer) = customize::view(
+                    draft,
+                    self.theme_message.as_deref(),
+                    self.config.icon_style,
+                    self.config.preview_background,
+                );
                 cosmic::app::context_drawer::context_drawer(
                     content,
                     Message::ToggleContextPage(ContextPage::Customize),
@@ -686,6 +694,16 @@ impl cosmic::Application for KiwiApp {
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.key_display_mode = mode;
                 }
+            }
+            Message::TogglePreviewBackground => {
+                self.config.preview_background = self.config.preview_background.toggled();
+                self.save_config();
+            }
+            Message::CustomizeTheme(choice) => {
+                if choice != ThemeChoice::from_config(&self.config) {
+                    self.select_theme(choice);
+                }
+                return self.update_customize(customize::CustomizeMessage::Open);
             }
             Message::IconStyleTab(entity) => {
                 self.icon_style_model.activate(entity);

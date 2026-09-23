@@ -8,13 +8,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use cosmic::iced::{Alignment, Color, Length};
-use cosmic::widget::{self, segmented_button, settings, svg, Svg};
+use cosmic::widget::{self, segmented_button, settings};
 use cosmic::{Element, Task};
 
 use crate::color_picker::{color_picker, gradient_bar, Hsva};
 use crate::config::{IconStyle, OverlayPosition};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke, ICON_KEYS};
-use crate::settings::{segmented_model, select_segment, CHECKERBOARD_SVG};
+use crate::settings::{segmented_model, select_segment};
 use crate::theme::{
     self, icon_file_stem, Fill, Hex, Layout, RailStyle, Repeats, Theme, ThemeChoice,
 };
@@ -563,6 +563,7 @@ pub fn view<'a>(
     draft: &'a Draft,
     message: Option<&'a str>,
     icon_style: IconStyle,
+    background: crate::config::PreviewBackground,
 ) -> (Element<'a, Message>, Element<'a, Message>) {
     let theme = &draft.theme;
     let send = |m: CustomizeMessage| Message::Customize(m);
@@ -829,7 +830,7 @@ pub fn view<'a>(
 
     let mut content = widget::Column::new()
         .spacing(16)
-        .push(preview(theme, icon_style))
+        .push(preview(theme, icon_style, background))
         .push(banner(draft))
         .push(layout)
         .push(rail)
@@ -931,7 +932,11 @@ fn font_picker<'a>(query: &'a str, current: Option<&str>) -> Element<'a, Message
 }
 
 /// Keys and rail drawn with the theme being edited, including a held key and a repeat
-fn preview<'a>(theme: &Theme, icon_style: IconStyle) -> Element<'a, Message> {
+fn preview<'a>(
+    theme: &Theme,
+    icon_style: IconStyle,
+    background: crate::config::PreviewBackground,
+) -> Element<'a, Message> {
     let ctrl = KeyModifiers {
         ctrl: true,
         ..Default::default()
@@ -965,13 +970,8 @@ fn preview<'a>(theme: &Theme, icon_style: IconStyle) -> Element<'a, Message> {
         icon_style,
         crate::keystroke::Motion::default(),
     );
-    // Checkerboard behind the keys shows how transparent the theme is
-    let checkerboard = Svg::new(svg::Handle::from_memory(CHECKERBOARD_SVG))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .content_fit(cosmic::iced::ContentFit::Cover);
     widget::container(cosmic::iced::widget::stack![
-        checkerboard,
+        crate::settings::preview_backdrop(background),
         widget::container(sample)
             .width(Length::Fill)
             .height(Length::Fill)

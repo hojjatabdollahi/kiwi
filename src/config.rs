@@ -22,6 +22,26 @@ pub enum BuiltinTheme {
     Typewriter,
 }
 
+/// What the theme previews in settings are drawn on
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PreviewBackground {
+    /// A gradient that looks like a desktop wallpaper
+    #[default]
+    Desktop,
+    /// A checkerboard, to show exactly how transparent a theme is
+    Checkered,
+}
+
+impl PreviewBackground {
+    /// The other background
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Desktop => Self::Checkered,
+            Self::Checkered => Self::Desktop,
+        }
+    }
+}
+
 /// Position of the overlay on screen
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OverlayPosition {
@@ -166,6 +186,8 @@ pub struct Config {
     pub show_touch: bool,
     /// Show drawing tablet input (pen taps, eraser, pen and pad buttons)
     pub show_tablet: bool,
+    /// What the theme previews in settings are drawn on
+    pub preview_background: PreviewBackground,
 }
 
 impl Default for Config {
@@ -187,6 +209,7 @@ impl Default for Config {
             show_gestures: true,
             show_touch: true,
             show_tablet: true,
+            preview_background: PreviewBackground::Desktop,
         }
     }
 }
