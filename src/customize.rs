@@ -4,7 +4,6 @@
 //! Edits go to a draft that the overlay shows live. Built-in themes are never
 //! changed, and saved themes only change when the draft is saved over them.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -12,6 +11,7 @@ use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{self, settings};
 use cosmic::{Element, Task};
 
+use crate::color_picker::{color_picker, swatch, Hsva};
 use crate::keystroke::ICON_KEYS;
 use crate::theme::{
     self, icon_file_stem, Fill, Hex, Layout, RailStyle, Repeats, Theme, ThemeChoice,
@@ -31,16 +31,6 @@ pub enum ColorField {
 }
 
 impl ColorField {
-    const ALL: [Self; 7] = [
-        Self::KeyBackground,
-        Self::KeyPressed,
-        Self::KeyText,
-        Self::KeyBorder,
-        Self::RailBackground,
-        Self::RailBorder,
-        Self::RailDivider,
-    ];
-
     /// Only backgrounds can be gradients
     fn allows_gradient(self) -> bool {
         matches!(self, Self::KeyBackground | Self::RailBackground)
@@ -57,6 +47,25 @@ impl ColorField {
             Self::RailBorder => rail.map(|r| Fill::Solid(r.border.color)),
             Self::RailDivider => rail.and_then(|r| r.divider).map(Fill::Solid),
         }
+    }
+
+    /// One color of the field: the only one, or the start (0) or end (1) of a gradient
+    fn stop(self, theme: &Theme, stop: usize) -> Option<Hex> {
+        match (self.get(theme)?, stop) {
+            (Fill::Solid(color), 0) | (Fill::Gradient(color, _), 0) => Some(color),
+            (Fill::Gradient(_, color), 1) => Some(color),
+            _ => None,
+        }
+    }
+
+    fn set_stop(self, theme: &mut Theme, stop: usize, color: Hex) -> bool {
+        let fill = match (self.get(theme), stop) {
+            (Some(Fill::Gradient(_, end)), 0) => Fill::Gradient(color, end),
+            (Some(Fill::Gradient(start, _)), 1) => Fill::Gradient(start, color),
+            (_, 0) => Fill::Solid(color),
+            _ => return false,
+        };
+        self.set(theme, Some(fill))
     }
 
     /// Store a value; returns false if this field can't take it
@@ -147,7 +156,16 @@ pub enum CustomizeMessage {
     SetLayout(Layout),
     SetDefaultSize(f32),
     SetRail(bool),
-    SetColor(ColorField, String),
+    /// Open the picker for one color of a field, or close it if it's already open
+    PickColor(ColorField, usize),
+    PickerChanged(Hsva),
+    PickerHex(String),
+    PickerDone,
+    PickerCancel,
+    /// Switch a background between one color and a gradient
+    ToggleGradient(ColorField),
+    /// Remove an optional color (the divider)
+    ClearColor(ColorField),
     Nudge(NumberField, f32),
     SetRepeats(Repeats),
     SetRecolorIcons(bool),
@@ -168,8 +186,8 @@ pub struct Draft {
     pub edited: bool,
     /// Where the icons come from (copied into the theme folder on save)
     pub icons_dir: Option<PathBuf>,
-    /// Color fields as typed, so half-typed hex isn't lost
-    colors: HashMap<ColorField, String>,
+    /// The color being picked, if the picker is open
+    picking: Option<Picking>,
     /// The rail's settings while it's switched off, to bring them back
     rail_backup: RailStyle,
     save_name: String,
@@ -182,17 +200,13 @@ impl Draft {
             ThemeChoice::Builtin(builtin) => format!("My {}", builtin.name()),
             ThemeChoice::User(name) => name.clone(),
         };
-        let colors = ColorField::ALL
-            .into_iter()
-            .map(|field| (field, fill_text(field.get(&theme))))
-            .collect();
         Self {
             icons_dir: base.icons_dir(&theme::themes_dir()),
             rail_backup: theme.rail.unwrap_or_default(),
             base,
             theme,
             edited: false,
-            colors,
+            picking: None,
             save_name,
             show_missing_icons: false,
         }
@@ -216,25 +230,24 @@ impl Draft {
     }
 }
 
-/// "#rrggbbaa", "#rrggbbaa, #rrggbbaa" for a gradient, or nothing
-fn fill_text(fill: Option<Fill>) -> String {
-    match fill {
-        None => String::new(),
-        Some(Fill::Solid(color)) => color.to_text(),
-        Some(Fill::Gradient(start, end)) => format!("{}, {}", start.to_text(), end.to_text()),
-    }
+/// The color the picker is open for
+struct Picking {
+    field: ColorField,
+    stop: usize,
+    hsva: Hsva,
+    /// The hex field's text, kept while it's being typed
+    hex: String,
+    /// The field before picking started, for Cancel
+    before: Option<Fill>,
 }
 
-/// The reverse of `fill_text`: `Some(None)` for empty text, `None` if it doesn't parse
-fn parse_fill(text: &str) -> Option<Option<Fill>> {
-    let parts: Vec<&str> = text.split(',').map(str::trim).collect();
-    match parts.as_slice() {
-        [""] => Some(None),
-        [one] => Some(Some(Fill::Solid(Hex::parse(one)?))),
-        [start, end] => Some(Some(Fill::Gradient(Hex::parse(start)?, Hex::parse(end)?))),
-        _ => None,
-    }
-}
+/// A new divider starts as a faint white line
+const NEW_DIVIDER: Hex = Hex(cosmic::iced::Color {
+    r: 1.0,
+    g: 1.0,
+    b: 1.0,
+    a: 0.14,
+});
 
 impl KiwiApp {
     pub(crate) fn update_customize(
@@ -284,24 +297,75 @@ impl KiwiApp {
                 if !on && draft.theme.layout == Layout::Text {
                     draft.theme.layout = Layout::Keys;
                 }
-                for field in [
-                    ColorField::RailBackground,
-                    ColorField::RailBorder,
-                    ColorField::RailDivider,
-                ] {
-                    draft
-                        .colors
-                        .insert(field, fill_text(field.get(&draft.theme)));
-                }
+                draft.picking = None;
             }
-            M::SetColor(field, text) => {
-                let applied =
-                    parse_fill(&text).is_some_and(|fill| field.set(&mut draft.theme, fill));
-                draft.colors.insert(field, text);
-                if !applied {
-                    // Keep what was typed, but don't mark anything changed yet
+            M::PickColor(field, stop) => {
+                let already_open = draft
+                    .picking
+                    .as_ref()
+                    .is_some_and(|p| p.field == field && p.stop == stop);
+                draft.picking = if already_open {
+                    None
+                } else {
+                    let color = field.stop(&draft.theme, stop).unwrap_or(NEW_DIVIDER);
+                    Some(Picking {
+                        field,
+                        stop,
+                        hsva: Hsva::from_color(color.0),
+                        hex: color.to_text(),
+                        before: field.get(&draft.theme),
+                    })
+                };
+                return Task::none();
+            }
+            M::PickerChanged(hsva) => {
+                let Some(picking) = &mut draft.picking else {
                     return Task::none();
-                }
+                };
+                let color = Hex(hsva.to_color());
+                picking.hsva = hsva;
+                picking.hex = color.to_text();
+                picking
+                    .field
+                    .set_stop(&mut draft.theme, picking.stop, color);
+            }
+            M::PickerHex(text) => {
+                let Some(picking) = &mut draft.picking else {
+                    return Task::none();
+                };
+                let parsed = Hex::parse(text.trim());
+                picking.hex = text;
+                // Keep what was typed, but only apply it once it's a whole color
+                let Some(color) = parsed else {
+                    return Task::none();
+                };
+                picking.hsva = Hsva::from_color(color.0);
+                picking
+                    .field
+                    .set_stop(&mut draft.theme, picking.stop, color);
+            }
+            M::PickerDone => {
+                draft.picking = None;
+                return Task::none();
+            }
+            M::PickerCancel => {
+                let Some(picking) = draft.picking.take() else {
+                    return Task::none();
+                };
+                picking.field.set(&mut draft.theme, picking.before);
+            }
+            M::ToggleGradient(field) => {
+                let fill = match field.get(&draft.theme) {
+                    Some(Fill::Solid(color)) => Fill::Gradient(color, color),
+                    Some(Fill::Gradient(start, _)) => Fill::Solid(start),
+                    None => return Task::none(),
+                };
+                field.set(&mut draft.theme, Some(fill));
+                draft.picking = None;
+            }
+            M::ClearColor(field) => {
+                field.set(&mut draft.theme, None);
+                draft.picking = None;
             }
             M::Nudge(field, delta) => field.nudge(&mut draft.theme, delta),
             M::SetRepeats(repeats) => draft.theme.key.repeats = repeats,
@@ -396,21 +460,71 @@ pub fn view<'a>(
     let theme = &draft.theme;
     let send = |m: CustomizeMessage| Message::Customize(m);
 
-    let color = |label: &'static str, field: ColorField| {
-        let text = draft.colors.get(&field).map(String::as_str).unwrap_or("");
-        let placeholder = if field.allows_gradient() {
-            "#rrggbbaa or two for a gradient"
-        } else if field == ColorField::RailDivider {
-            "none"
-        } else {
-            "#rrggbbaa"
+    // A color row: swatches that open the picker, which then shows under the row
+    let add_color = |section: settings::Section<'a, Message>,
+                     label: &'static str,
+                     field: ColorField| {
+        let mut swatches = widget::Row::new().spacing(6).align_y(Alignment::Center);
+        let stops = match field.get(theme) {
+            Some(Fill::Gradient(..)) => 2,
+            Some(Fill::Solid(_)) => 1,
+            None => 0,
         };
-        settings::item(
-            label,
-            widget::text_input(placeholder, text)
-                .on_input(move |text| send(CustomizeMessage::SetColor(field, text)))
-                .width(Length::Fixed(170.0)),
-        )
+        for stop in 0..stops {
+            let color = field.stop(theme, stop).map_or(NEW_DIVIDER.0, |c| c.0);
+            swatches = swatches.push(
+                widget::button::custom(swatch(color))
+                    .padding(2)
+                    .class(cosmic::theme::Button::Image)
+                    .selected(
+                        draft
+                            .picking
+                            .as_ref()
+                            .is_some_and(|p| p.field == field && p.stop == stop),
+                    )
+                    .on_press(send(CustomizeMessage::PickColor(field, stop))),
+            );
+        }
+        if field.allows_gradient() {
+            let label = if stops == 2 { "Solid" } else { "Gradient" };
+            swatches = swatches.push(
+                widget::button::link(label).on_press(send(CustomizeMessage::ToggleGradient(field))),
+            );
+        } else if field == ColorField::RailDivider {
+            swatches = swatches.push(if stops == 0 {
+                widget::button::link("Add").on_press(send(CustomizeMessage::PickColor(field, 0)))
+            } else {
+                widget::button::link("Remove").on_press(send(CustomizeMessage::ClearColor(field)))
+            });
+        }
+
+        let section = section.add(settings::item(label, swatches));
+        match &draft.picking {
+            Some(picking) if picking.field == field => section.add(
+                widget::Column::new()
+                    .spacing(8)
+                    .push(color_picker(
+                        picking.hsva,
+                        &picking.hex,
+                        move |hsva| send(CustomizeMessage::PickerChanged(hsva)),
+                        move |hex| send(CustomizeMessage::PickerHex(hex)),
+                    ))
+                    .push(
+                        widget::Row::new()
+                            .spacing(8)
+                            .push(widget::Space::new().width(Length::Fill))
+                            .push(
+                                widget::button::standard("Cancel")
+                                    .on_press(send(CustomizeMessage::PickerCancel)),
+                            )
+                            .push(
+                                widget::button::suggested("Done")
+                                    .on_press(send(CustomizeMessage::PickerDone)),
+                            ),
+                    ),
+            ),
+            _ => section,
+        }
     };
     let number = |label: &'static str, field: NumberField| {
         let step = match field {
@@ -485,21 +599,25 @@ pub fn view<'a>(
             }),
     );
     if theme.rail.is_some() {
+        rail = add_color(rail, "Background", ColorField::RailBackground);
+        rail = add_color(rail, "Border", ColorField::RailBorder);
         rail = rail
-            .add(color("Background", ColorField::RailBackground))
-            .add(color("Border", ColorField::RailBorder))
             .add(number("Border width", NumberField::RailBorderWidth))
             .add(number("Corner radius", NumberField::RailRadius))
-            .add(number("Padding", NumberField::RailPadding))
-            .add(color("Divider between keys", ColorField::RailDivider));
+            .add(number("Padding", NumberField::RailPadding));
+        rail = add_color(rail, "Divider between keys", ColorField::RailDivider);
     }
 
-    let keys = settings::section()
-        .title("Keys")
-        .add(color("Background", ColorField::KeyBackground))
-        .add(color("While held", ColorField::KeyPressed))
-        .add(color("Text", ColorField::KeyText))
-        .add(color("Border", ColorField::KeyBorder))
+    let mut keys = settings::section().title("Keys");
+    for (label, field) in [
+        ("Background", ColorField::KeyBackground),
+        ("While held", ColorField::KeyPressed),
+        ("Text", ColorField::KeyText),
+        ("Border", ColorField::KeyBorder),
+    ] {
+        keys = add_color(keys, label, field);
+    }
+    let keys = keys
         .add(number("Border width", NumberField::KeyBorderWidth))
         .add(number("Corner radius", NumberField::KeyRadius))
         .add(number("Gap between keys", NumberField::KeyGap))
@@ -617,26 +735,38 @@ mod tests {
     use crate::config::BuiltinTheme;
 
     #[test]
-    fn color_text_round_trips() {
-        let theme = Theme::builtin(BuiltinTheme::Tape);
-        for field in ColorField::ALL {
-            // Colors go through 8-bit hex, so compare the text
-            let text = fill_text(field.get(&theme));
-            assert_eq!(parse_fill(&text).map(fill_text), Some(text), "{field:?}");
-        }
-        assert_eq!(parse_fill("  "), Some(None));
-        assert_eq!(parse_fill("#fff"), None);
-        assert_eq!(parse_fill("#000000, #ffffff, #000000"), None);
+    fn gradient_stops_edit_separately() {
+        let mut theme = Theme::builtin(BuiltinTheme::Frosted);
+        let red = Hex::parse("#ff0000").unwrap();
+        let (start, _) = match theme.key.background {
+            Fill::Gradient(start, end) => (start, end),
+            Fill::Solid(_) => panic!("Frosted keys have a gradient"),
+        };
+        assert!(ColorField::KeyBackground.set_stop(&mut theme, 1, red));
+        assert_eq!(theme.key.background, Fill::Gradient(start, red));
+        // Solid fields have no second stop
+        assert!(!ColorField::KeyText.set_stop(&mut theme, 1, red));
+        // Setting the first stop of an empty divider adds one, but only with a rail
+        assert!(!ColorField::RailDivider.set_stop(&mut theme, 0, red));
+        let mut ribbon = Theme::builtin(BuiltinTheme::Ribbon);
+        assert!(ColorField::RailDivider.set_stop(&mut ribbon, 0, red));
+        assert_eq!(ColorField::RailDivider.stop(&ribbon, 0), Some(red));
     }
 
     #[test]
     fn fields_only_take_what_fits() {
         let mut theme = Theme::builtin(BuiltinTheme::Frosted);
-        let gradient = parse_fill("#000000, #ffffff").unwrap();
+        let gradient = Some(Fill::Gradient(
+            Hex::parse("#000000").unwrap(),
+            Hex::parse("#ffffff").unwrap(),
+        ));
         assert!(!ColorField::KeyText.set(&mut theme, gradient));
         assert!(ColorField::KeyBackground.set(&mut theme, gradient));
         // No rail yet, so rail fields can't be set
-        assert!(!ColorField::RailBorder.set(&mut theme, parse_fill("#ffffff").unwrap()));
+        assert!(!ColorField::RailBorder.set(
+            &mut theme,
+            Some(Fill::Solid(Hex::parse("#ffffff").unwrap()))
+        ));
 
         let mut tape = Theme::builtin(BuiltinTheme::Tape);
         assert!(ColorField::RailDivider.set(&mut tape, None));

@@ -1,6 +1,7 @@
 //! Kiwi keystroke visualizer - unified app with settings, tray icon, and overlay
 
 mod capture;
+mod color_picker;
 mod config;
 mod cosmic_xkb;
 mod customize;
