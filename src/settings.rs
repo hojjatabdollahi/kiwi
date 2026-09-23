@@ -31,6 +31,8 @@ pub fn settings_view(
     fade_duration: f32,
     themes: &[(ThemeChoice, Arc<Theme>)],
     current_theme: &ThemeChoice,
+    // The current theme's name, marked when it has unsaved edits
+    current_name: &str,
     theme_message: Option<&str>,
     position: OverlayPosition,
     margin: f32,
@@ -47,12 +49,13 @@ pub fn settings_view(
     for pair in themes.chunks(2) {
         let mut row = widget::Row::new().spacing(8);
         for (choice, theme) in pair {
-            row = row.push(theme_card(
-                choice,
-                theme,
-                choice == current_theme,
-                icon_style,
-            ));
+            let selected = choice == current_theme;
+            let name = if selected {
+                current_name
+            } else {
+                choice.name()
+            };
+            row = row.push(theme_card(choice, name, theme, selected, icon_style));
         }
         if pair.len() == 1 {
             row = row.push(widget::Space::new().width(Length::Fill));
@@ -75,6 +78,10 @@ pub fn settings_view(
         .push(
             widget::Row::new()
                 .spacing(8)
+                .push(
+                    widget::button::standard("Customize…")
+                        .on_press(Message::Customize(crate::customize::CustomizeMessage::Open)),
+                )
                 .push(widget::Space::new().width(Length::Fill))
                 .push(widget::button::standard("Import…").on_press(Message::ImportTheme))
                 .push(widget::button::standard("Export…").on_press(Message::ExportTheme)),
@@ -261,6 +268,7 @@ pub fn settings_view(
 /// A clickable theme card showing a short sample drawn with that theme
 fn theme_card(
     choice: &ThemeChoice,
+    name: &str,
     theme: &Theme,
     selected: bool,
     icon_style: IconStyle,
@@ -312,7 +320,7 @@ fn theme_card(
         .spacing(6)
         .width(Length::Fill)
         .push(preview)
-        .push(widget::text::body(choice.name().to_string()));
+        .push(widget::text::body(name.to_string()));
 
     widget::button::custom(content)
         .class(cosmic::theme::Button::Image)

@@ -285,6 +285,73 @@ pub fn drag_variant(key: &str) -> Option<&'static str> {
     }
 }
 
+/// Every key Kiwi has a built-in icon for, which themes can replace
+pub const ICON_KEYS: &[&str] = &[
+    "↵",
+    "⇧",
+    "Ctrl",
+    "Alt",
+    "Tab",
+    "Caps",
+    "Super",
+    "Esc",
+    "PrtSc",
+    "Home",
+    "End",
+    "PgUp",
+    "PgDn",
+    "⌫",
+    "␣",
+    "Del",
+    "Ins",
+    "Pause",
+    "ScrLk",
+    "VolUp",
+    "VolDown",
+    "Mute",
+    "Play",
+    "Media",
+    "Prev",
+    "Next",
+    "Airplane",
+    "BriUp",
+    "BriDown",
+    "LClick",
+    "RClick",
+    "MClick",
+    "LDrag",
+    "ScrollUp",
+    "ScrollDown",
+    "Tap",
+    "TapDrag",
+    "2Tap",
+    "2Up",
+    "2Down",
+    "2Left",
+    "2Right",
+    "3Tap",
+    "3Up",
+    "3Down",
+    "4Tap",
+    "4Up",
+    "4Down",
+    "PenTap",
+    "PenDrag",
+    "Pen1",
+    "Pen2",
+    "Pen3",
+    "Eraser",
+    "EraserDrag",
+    "Pad1",
+    "Pad2",
+    "Pad3",
+    "Pad4",
+    "Pad5",
+    "Pad6",
+    "Pad7",
+    "Pad8",
+];
+
 fn get_icon_for_key_with_style(key: &str, icon_style: IconStyle) -> Option<(&'static [u8], bool)> {
     let use_text = matches!(icon_style, IconStyle::Text);
 
@@ -1046,6 +1113,16 @@ mod tests {
         // Backspace is shown as a key, not applied to the text
         assert_eq!(line(&typed), "Hello w[⌫][Ctrl+S][↵]@");
         assert_eq!(line(&[key("␣"), key("Tab"), key("⇧")]), " [Tab][⇧]");
+    }
+
+    #[test]
+    fn every_icon_key_has_an_icon() {
+        for key in ICON_KEYS {
+            assert!(
+                get_icon_for_key_with_style(key, IconStyle::Symbol).is_some(),
+                "{key}"
+            );
+        }
     }
 
     #[test]

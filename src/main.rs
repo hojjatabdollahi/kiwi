@@ -3,6 +3,7 @@
 mod capture;
 mod config;
 mod cosmic_xkb;
+mod customize;
 mod input;
 mod keystroke;
 mod overlay;
@@ -40,6 +41,7 @@ const APP_ICON: &[u8] = include_bytes!("../data/icons/kiwi-on.svg");
 pub enum ContextPage {
     #[default]
     About,
+    Customize,
 }
 
 fn main() -> cosmic::iced::Result {
@@ -93,6 +95,8 @@ struct KiwiApp {
     theme_message: Option<String>,
     /// Set while the overlay is being arranged on screen
     arranging: Option<Arranging>,
+    /// The theme being edited in the Customize drawer
+    draft: Option<customize::Draft>,
 }
 
 /// An arrange-on-screen session
@@ -128,6 +132,7 @@ pub enum Message {
     ExportTheme,
     ExportThemeTo(std::path::PathBuf),
     ThemeMessage(String),
+    Customize(customize::CustomizeMessage),
     SetPosition(OverlayPosition),
     SetKeyDisplayMode(config::KeyDisplayMode),
     SetIconStyle(config::IconStyle),
@@ -234,6 +239,7 @@ impl cosmic::Application for KiwiApp {
             themes: Vec::new(),
             theme_message: None,
             arranging: None,
+            draft: None,
         };
 
         // Load bundled font
@@ -274,6 +280,16 @@ impl cosmic::Application for KiwiApp {
                 |url| Message::LaunchUrl(url.to_string()),
                 Message::ToggleContextPage(ContextPage::About),
             ),
+            ContextPage::Customize => {
+                let draft = self.draft.as_ref()?;
+                let (content, footer) = customize::view(draft, self.theme_message.as_deref());
+                cosmic::app::context_drawer::context_drawer(
+                    content,
+                    Message::ToggleContextPage(ContextPage::Customize),
+                )
+                .title("Customize")
+                .footer(footer)
+            }
         })
     }
 
@@ -309,6 +325,7 @@ impl cosmic::Application for KiwiApp {
             self.config.fade_duration,
             &self.themes,
             &ThemeChoice::from_config(&self.config),
+            &self.current_theme_name(),
             self.theme_message.as_deref(),
             self.config.position,
             self.config.margin,
@@ -332,6 +349,7 @@ impl cosmic::Application for KiwiApp {
                 self.config.fade_duration,
                 &self.themes,
                 &ThemeChoice::from_config(&self.config),
+                &self.current_theme_name(),
                 self.theme_message.as_deref(),
                 self.config.position,
                 self.config.margin,
@@ -552,14 +570,28 @@ impl cosmic::Application for KiwiApp {
                 });
             }
             Message::ExportThemeTo(path) => {
-                let choice = ThemeChoice::from_config(&self.config);
-                self.theme_message =
-                    Some(match theme::export(&choice, &theme::themes_dir(), &path) {
-                        Ok(()) => format!("Exported to {}", path.display()),
-                        Err(e) => format!("Can't export: {e}"),
-                    });
+                let dir = theme::themes_dir();
+                // Unsaved edits are exported as they are
+                let source = match &self.draft {
+                    Some(draft) if draft.edited => {
+                        Ok((draft.theme.to_ron(), draft.icons_dir.clone()))
+                    }
+                    _ => {
+                        let choice = ThemeChoice::from_config(&self.config);
+                        choice
+                            .file_text(&dir)
+                            .map(|text| (text, choice.icons_dir(&dir)))
+                    }
+                };
+                let result =
+                    source.and_then(|(text, icons)| theme::export(&text, icons.as_deref(), &path));
+                self.theme_message = Some(match result {
+                    Ok(()) => format!("Exported to {}", path.display()),
+                    Err(e) => format!("Can't export: {e}"),
+                });
             }
             Message::ThemeMessage(message) => self.theme_message = Some(message),
+            Message::Customize(message) => return self.update_customize(message),
             Message::SetPosition(position) => {
                 self.config.position = position;
                 self.apply_arrangement();
@@ -830,9 +862,20 @@ impl KiwiApp {
             .find(|(c, _)| *c == choice)
             .map(|(_, theme)| theme.clone())
             .unwrap_or_else(|| Arc::new(choice.load(&theme::themes_dir())));
+        // Picking another theme while customizing starts over from that theme
+        if self.draft.is_some() {
+            self.draft = Some(customize::Draft::new(choice.clone(), Theme::clone(&theme)));
+        }
         if let Ok(mut state) = self.shared_state.lock() {
             state.theme_choice = choice;
             state.theme = theme;
+        }
+    }
+
+    fn current_theme_name(&self) -> String {
+        match &self.draft {
+            Some(draft) => draft.name(),
+            None => ThemeChoice::from_config(&self.config).name().to_string(),
         }
     }
 

@@ -25,10 +25,22 @@ use crate::config::BuiltinTheme;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hex(pub Color);
 
+impl Hex {
+    /// Parse "#rrggbb" or "#rrggbbaa"
+    pub fn parse(s: &str) -> Option<Self> {
+        parse_hex(s).map(Hex)
+    }
+
+    /// Always "#rrggbbaa"
+    pub fn to_text(self) -> String {
+        let [r, g, b, a] = self.0.into_rgba8();
+        format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
+    }
+}
+
 impl Serialize for Hex {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let [r, g, b, a] = self.0.into_rgba8();
-        serializer.serialize_str(&format!("#{r:02x}{g:02x}{b:02x}{a:02x}"))
+        serializer.serialize_str(&self.to_text())
     }
 }
 
@@ -324,23 +336,31 @@ impl Theme {
         let text = fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
         let mut theme: Theme =
             ron::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+        theme.load_icons(&dir.join(ICONS_DIR));
+        Ok(theme)
+    }
 
-        if let Ok(entries) = fs::read_dir(dir.join(ICONS_DIR)) {
-            for path in entries.flatten().map(|entry| entry.path()) {
-                let Some(stem) = svg_stem(&path) else {
-                    continue;
-                };
-                match fs::read(&path) {
-                    Ok(bytes) => {
-                        theme
-                            .icons
-                            .insert(stem.to_string(), svg::Handle::from_memory(bytes));
-                    }
-                    Err(e) => log::warn!("Skipping icon {}: {e}", path.display()),
+    /// Replace the theme's icons with the SVG files in `dir`
+    pub fn load_icons(&mut self, dir: &Path) {
+        self.icons.clear();
+        for path in svg_files(dir) {
+            let Some(stem) = svg_stem(&path) else {
+                continue;
+            };
+            match fs::read(&path) {
+                Ok(bytes) => {
+                    self.icons
+                        .insert(stem.to_string(), svg::Handle::from_memory(bytes));
                 }
+                Err(e) => log::warn!("Skipping icon {}: {e}", path.display()),
             }
         }
-        Ok(theme)
+    }
+
+    /// The theme as `theme.ron` text
+    pub fn to_ron(&self) -> String {
+        ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+            .expect("a theme always serializes")
     }
 
     /// The theme's own icon for `key`, if its icon folder has one
@@ -377,6 +397,19 @@ fn svg_stem(path: &Path) -> Option<&str> {
         return None;
     }
     path.file_stem()?.to_str()
+}
+
+/// The SVG files in a folder, sorted (none if it can't be read)
+fn svg_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| svg_stem(path).is_some())
+        .collect();
+    files.sort();
+    files
 }
 
 /// Where user themes live: `$XDG_CONFIG_HOME/kiwi/themes`, usually `~/.config/kiwi/themes`
@@ -428,6 +461,24 @@ impl ThemeChoice {
             .map(|palette| Self::Builtin(*palette))
             .chain(user.into_iter().map(Self::User))
             .collect()
+    }
+
+    /// The folder a user theme's icons live in
+    pub fn icons_dir(&self, themes_dir: &Path) -> Option<PathBuf> {
+        match self {
+            Self::Builtin(_) => None,
+            Self::User(name) => Some(themes_dir.join(name).join(ICONS_DIR)),
+        }
+    }
+
+    /// The theme's `theme.ron`: a user theme's file as written (comments included),
+    /// or a built-in theme written out from code
+    pub fn file_text(&self, themes_dir: &Path) -> Result<String, String> {
+        match self {
+            Self::Builtin(builtin) => Ok(Theme::builtin(*builtin).to_ron()),
+            Self::User(name) => fs::read_to_string(themes_dir.join(name).join(THEME_FILE))
+                .map_err(|e| e.to_string()),
+        }
     }
 
     /// Load the theme. A user theme that can't be read falls back to the default.
@@ -549,41 +600,15 @@ fn folder_name(name: &str) -> String {
         .to_string()
 }
 
-/// Write a theme to a zip: `theme.ron` at the top and a user theme's icons under `icons/`.
-///
-/// A user theme's `theme.ron` is copied as-is (keeping its comments); a built-in
-/// theme is written out from code.
-pub fn export(choice: &ThemeChoice, themes_dir: &Path, dest: &Path) -> Result<(), String> {
-    let (theme_text, icons_dir) = match choice {
-        ThemeChoice::Builtin(palette) => {
-            let pretty = ron::ser::PrettyConfig::default();
-            let text = ron::ser::to_string_pretty(&Theme::builtin(*palette), pretty)
-                .map_err(|e| e.to_string())?;
-            (text, None)
-        }
-        ThemeChoice::User(name) => {
-            let dir = themes_dir.join(name);
-            let text = fs::read_to_string(dir.join(THEME_FILE)).map_err(|e| e.to_string())?;
-            (text, Some(dir.join(ICONS_DIR)))
-        }
-    };
-
+/// Write a theme to a zip: `theme.ron` at the top and the icons from `icons_dir` under `icons/`
+pub fn export(theme_text: &str, icons_dir: Option<&Path>, dest: &Path) -> Result<(), String> {
     let write = || -> zip::result::ZipResult<()> {
         let options = zip::write::SimpleFileOptions::default();
         let mut zip = zip::ZipWriter::new(fs::File::create(dest)?);
         zip.start_file(THEME_FILE, options)?;
         zip.write_all(theme_text.as_bytes())?;
 
-        let mut icons: Vec<PathBuf> = icons_dir
-            .and_then(|dir| fs::read_dir(dir).ok())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| svg_stem(path).is_some())
-            .collect();
-        icons.sort();
-        for path in icons {
+        for path in icons_dir.map(svg_files).unwrap_or_default() {
             let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
@@ -594,6 +619,39 @@ pub fn export(choice: &ThemeChoice, themes_dir: &Path, dest: &Path) -> Result<()
         Ok(())
     };
     write().map_err(|e| format!("Can't write {}: {e}", dest.display()))
+}
+
+/// Save a theme as a folder in `themes_dir` and return the folder name. Icons are
+/// copied from `icons_from` unless they're already in that folder. An existing
+/// theme with the same name is replaced.
+pub fn save(
+    theme_text: &str,
+    icons_from: Option<&Path>,
+    themes_dir: &Path,
+    name: &str,
+) -> Result<String, String> {
+    let name = folder_name(name);
+    if name.is_empty() {
+        return Err("Give the theme a name".into());
+    }
+    let dest = themes_dir.join(&name);
+    let icons_dest = dest.join(ICONS_DIR);
+    let write = || -> std::io::Result<()> {
+        fs::create_dir_all(&icons_dest)?;
+        fs::write(dest.join(THEME_FILE), theme_text)?;
+        let same_folder = icons_from
+            .is_some_and(|from| fs::canonicalize(from).ok() == fs::canonicalize(&icons_dest).ok());
+        if !same_folder {
+            for path in icons_from.map(svg_files).unwrap_or_default() {
+                if let Some(file_name) = path.file_name() {
+                    fs::copy(&path, icons_dest.join(file_name))?;
+                }
+            }
+        }
+        Ok(())
+    };
+    write().map_err(|e| format!("Can't save {}: {e}", dest.display()))?;
+    Ok(name)
 }
 
 #[cfg(test)]
@@ -668,7 +726,9 @@ mod tests {
         fs::write(user.join("icons/Enter.svg"), SVG).unwrap();
 
         let zip = dir.join("Mine.zip");
-        export(&ThemeChoice::User("Mine".into()), &themes, &zip).unwrap();
+        let mine = ThemeChoice::User("Mine".into());
+        let text = mine.file_text(&themes).unwrap();
+        export(&text, mine.icons_dir(&themes).as_deref(), &zip).unwrap();
         // The name is taken, so the import gets a number
         assert_eq!(import(&zip, &themes).unwrap(), "Mine 2");
 
@@ -687,7 +747,8 @@ mod tests {
         );
 
         let builtin = dir.join("Kiwi.zip");
-        export(&ThemeChoice::Builtin(BuiltinTheme::Kiwi), &themes, &builtin).unwrap();
+        let kiwi = ThemeChoice::Builtin(BuiltinTheme::Kiwi);
+        export(&kiwi.file_text(&themes).unwrap(), None, &builtin).unwrap();
         let name = import(&builtin, &themes).unwrap();
         // Colors go through 8-bit hex, so compare what the file holds
         let border = |theme: Theme| ron::to_string(&theme.key.border).unwrap();
@@ -695,6 +756,39 @@ mod tests {
             border(Theme::load(&themes.join(name)).unwrap()),
             border(Theme::builtin(BuiltinTheme::Kiwi))
         );
+    }
+
+    #[test]
+    fn save_copies_icons_and_replaces() {
+        let dir = scratch("save");
+        let themes = dir.join("themes");
+        let icons = dir.join("my icons");
+        fs::create_dir_all(&icons).unwrap();
+        fs::write(icons.join("Tab.svg"), SVG).unwrap();
+
+        let theme = Theme::builtin(BuiltinTheme::Tape);
+        assert_eq!(
+            save(&theme.to_ron(), Some(&icons), &themes, "Talk/mode!").unwrap(),
+            "Talkmode"
+        );
+        let saved = Theme::load(&themes.join("Talkmode")).unwrap();
+        assert!(saved.icon("Tab").is_some());
+        assert_eq!(saved.to_ron(), theme.to_ron());
+
+        // Saving over itself keeps its icons
+        let own_icons = ThemeChoice::User("Talkmode".into()).icons_dir(&themes);
+        save(
+            "(key: (gap: 3.0))",
+            own_icons.as_deref(),
+            &themes,
+            "Talkmode",
+        )
+        .unwrap();
+        let saved = Theme::load(&themes.join("Talkmode")).unwrap();
+        assert_eq!(saved.key.gap, 3.0);
+        assert!(saved.icon("Tab").is_some());
+
+        assert!(save("()", None, &themes, " ! ").is_err());
     }
 
     #[test]
