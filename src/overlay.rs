@@ -159,10 +159,11 @@ impl SharedState {
     /// True while keys are sliding: one just left the slot, or one is shrinking
     /// away as it expires. The overlay then needs frequent redraws.
     pub fn is_sliding(&self) -> bool {
-        use crate::keystroke::{closing_secs, SLIDE_SECS, SLOT_GROW_SECS};
+        use crate::keystroke::{expiring_secs, SLIDE_SECS, SLOT_GROW_SECS};
         let expiring = |k: &Keystroke| {
             let left = self.fade_duration - k.age_secs();
-            !k.pressed && (0.0..closing_secs(k)).contains(&left)
+            let secs = expiring_secs(&self.theme, k, self.fade_duration);
+            !k.pressed && (0.0..secs).contains(&left)
         };
         self.shifted_at
             .is_some_and(|at| at.elapsed().as_secs_f32() < SLIDE_SECS)
@@ -401,6 +402,9 @@ struct Snapshot {
     icon_style: IconStyle,
     touches: Vec<TouchPoint>,
     arranging: bool,
+    /// Whether the keys are showing at all (on, previewing or arranging), so an
+    /// always-visible rail doesn't stay on screen while Kiwi is off
+    showing: bool,
     motion: crate::keystroke::Motion,
 }
 
@@ -467,6 +471,7 @@ impl Snapshot {
             icon_style: s.icon_style,
             touches,
             arranging: s.arranging,
+            showing: s.enabled || s.arranging || s.preview.is_some(),
             motion: crate::keystroke::Motion {
                 shifted_at: s.shifted_at,
                 slot_grew: s.slot_grew,
@@ -658,7 +663,7 @@ pub fn view_overlay(
         Vertical::Top
     };
 
-    let content: cosmic::Element<'static, Message> = if frame.keystrokes.is_empty() {
+    let content: cosmic::Element<'static, Message> = if !frame.showing {
         cosmic::widget::Space::new().into()
     } else {
         keystrokes_row(

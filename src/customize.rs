@@ -16,7 +16,8 @@ use crate::config::{IconStyle, OverlayPosition};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke, ICON_KEYS};
 use crate::settings::{segmented_model, select_segment};
 use crate::theme::{
-    self, icon_file_stem, Fill, Hex, Layout, RailStyle, Repeats, Stop, Theme, ThemeChoice,
+    self, icon_file_stem, Expiry, Fill, Hex, Layout, RailStyle, RailVisibility, Repeats, Stop,
+    Theme, ThemeChoice,
 };
 use crate::widgets::{fill_chip, stepper};
 use crate::{KiwiApp, Message};
@@ -180,6 +181,8 @@ pub enum CustomizeMessage {
     ClearColor(ColorField),
     Nudge(NumberField, f32),
     RepeatsTab(segmented_button::Entity),
+    RailVisibilityTab(segmented_button::Entity),
+    ExpiryTab(segmented_button::Entity),
     /// Open the font list, or close it
     ToggleFontPicker,
     /// Text typed in the font list's search field
@@ -202,6 +205,16 @@ pub enum CustomizeMessage {
 }
 
 const LAYOUTS: &[(&str, Layout)] = &[("Each key", Layout::Keys), ("Typed text", Layout::Text)];
+const RAIL_VISIBILITY: &[(&str, RailVisibility)] = &[
+    ("Always", RailVisibility::Always),
+    ("With keys", RailVisibility::WithKeys),
+    ("Grow", RailVisibility::Grow),
+];
+const EXPIRY: &[(&str, Expiry)] = &[
+    ("Fade", Expiry::Fade),
+    ("Wipe", Expiry::Wipe),
+    ("Vanish", Expiry::Vanish),
+];
 const REPEATS: &[(&str, Repeats)] = &[
     ("Badge", Repeats::Badge),
     ("Inline", Repeats::Inline),
@@ -238,6 +251,8 @@ pub struct Draft {
     font_query: Option<String>,
     layout_model: segmented_button::SingleSelectModel,
     repeats_model: segmented_button::SingleSelectModel,
+    rail_visibility_model: segmented_button::SingleSelectModel,
+    expiry_model: segmented_button::SingleSelectModel,
 }
 
 impl Draft {
@@ -251,6 +266,11 @@ impl Draft {
             rail_backup: theme.rail.unwrap_or_default(),
             layout_model: segmented_model(LAYOUTS, theme.layout),
             repeats_model: segmented_model(REPEATS, theme.key.repeats),
+            rail_visibility_model: segmented_model(
+                RAIL_VISIBILITY,
+                theme.rail.map(|rail| rail.visibility).unwrap_or_default(),
+            ),
+            expiry_model: segmented_model(EXPIRY, theme.key.expire),
             naming: false,
             base,
             theme,
@@ -466,6 +486,23 @@ impl KiwiApp {
                 draft.picking = None;
             }
             M::Nudge(field, delta) => field.nudge(&mut draft.theme, delta),
+            M::RailVisibilityTab(entity) => {
+                draft.rail_visibility_model.activate(entity);
+                let Some(&visibility) = draft.rail_visibility_model.data::<RailVisibility>(entity)
+                else {
+                    return Task::none();
+                };
+                if let Some(rail) = &mut draft.theme.rail {
+                    rail.visibility = visibility;
+                }
+            }
+            M::ExpiryTab(entity) => {
+                draft.expiry_model.activate(entity);
+                let Some(&expire) = draft.expiry_model.data::<Expiry>(entity) else {
+                    return Task::none();
+                };
+                draft.theme.key.expire = expire;
+            }
             M::RepeatsTab(entity) => {
                 draft.repeats_model.activate(entity);
                 let Some(&repeats) = draft.repeats_model.data::<Repeats>(entity) else {
@@ -758,7 +795,16 @@ pub fn view<'a>(
                 "Corner radius",
                 number(NumberField::RailRadius),
             ))
-            .add(settings::item("Padding", number(NumberField::RailPadding)));
+            .add(settings::item("Padding", number(NumberField::RailPadding)))
+            .add(
+                settings::item::builder("Show the rail")
+                    .description("Always, at full length while keys show, or just around the keys")
+                    .control(
+                        widget::segmented_control::horizontal(&draft.rail_visibility_model)
+                            .on_activate(move |e| send(CustomizeMessage::RailVisibilityTab(e)))
+                            .width(Length::Shrink),
+                    ),
+            );
         rail = add_color(rail, "Divider between keys", ColorField::RailDivider);
     } else {
         rail = rail.add(widget::text::caption(
@@ -792,6 +838,12 @@ pub fn view<'a>(
             "Repeats",
             widget::segmented_control::horizontal(&draft.repeats_model)
                 .on_activate(move |e| send(CustomizeMessage::RepeatsTab(e)))
+                .width(Length::Shrink),
+        ))
+        .add(settings::item(
+            "Expired keys",
+            widget::segmented_control::horizontal(&draft.expiry_model)
+                .on_activate(move |e| send(CustomizeMessage::ExpiryTab(e)))
                 .width(Length::Shrink),
         ));
 

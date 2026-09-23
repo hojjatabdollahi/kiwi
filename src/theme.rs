@@ -168,6 +168,32 @@ pub struct KeyStyle {
     pub combo_background: Option<Fill>,
     /// How a key pressed several times in a row is shown
     pub repeats: Repeats,
+    /// How keys go away when they expire
+    pub expire: Expiry,
+}
+
+/// How keys go away when they expire
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Expiry {
+    /// Fade out, then close up
+    #[default]
+    Fade,
+    /// Stay fully visible, then wipe off from the far side
+    Wipe,
+    /// Stay fully visible, then go away at once
+    Vanish,
+}
+
+/// When the rail shows, and how long it is
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RailVisibility {
+    /// Always on screen at its full length, even with no keys
+    Always,
+    /// At its full length whenever any key shows
+    WithKeys,
+    /// Just around the keys, growing and shrinking with them
+    #[default]
+    Grow,
 }
 
 /// How a key pressed several times in a row is shown
@@ -204,6 +230,8 @@ pub struct RailStyle {
     pub padding: f32,
     /// A thin line of this color between keys
     pub divider: Option<Hex>,
+    /// When the rail shows, and how long it is
+    pub visibility: RailVisibility,
 }
 
 impl Default for RailStyle {
@@ -215,6 +243,7 @@ impl Default for RailStyle {
             radius: 8.0,
             padding: 0.0,
             divider: None,
+            visibility: RailVisibility::Grow,
         }
     }
 }
@@ -297,6 +326,8 @@ impl Theme {
                 Some(RailStyle {
                     radius: 10.0,
                     padding: 8.0,
+                    // The typewriter line keeps its full length while typing
+                    visibility: RailVisibility::WithKeys,
                     ..RailStyle::default()
                 }),
             ),
@@ -346,6 +377,7 @@ impl Theme {
                 badge_background: rgba(0.0, 0.0, 0.0, 0.6),
                 combo_background: None,
                 repeats: Repeats::Badge,
+                expire: Expiry::Fade,
             },
             // Bright with dark text
             BuiltinTheme::Light => KeyStyle {
@@ -360,6 +392,7 @@ impl Theme {
                 badge_background: rgba(1.0, 1.0, 1.0, 0.7),
                 combo_background: None,
                 repeats: Repeats::Badge,
+                expire: Expiry::Fade,
             },
             // Translucent glass with a gradient (the rail themes use these colors too)
             BuiltinTheme::Frosted
@@ -377,6 +410,7 @@ impl Theme {
                 badge_background: rgba(0.1, 0.15, 0.25, 0.7),
                 combo_background: None,
                 repeats: Repeats::Badge,
+                expire: Expiry::Fade,
             },
             // Kiwi green flesh, brown skin border, cream and seed-colored badge
             BuiltinTheme::Kiwi => KeyStyle {
@@ -394,6 +428,7 @@ impl Theme {
                 badge_background: rgba(0.95, 0.93, 0.85, 0.85),
                 combo_background: None,
                 repeats: Repeats::Badge,
+                expire: Expiry::Fade,
             },
         }
     }
@@ -824,6 +859,20 @@ mod tests {
             ron::from_str(r##"(key: (border: (color: ("#ff0000", "#0000ff"), width: 2.0)))"##)
                 .unwrap();
         assert!(matches!(gradient.key.border.color, Fill::Gradient(..)));
+
+        // Rail visibility and key expiry have defaults, and read back when set
+        let set: Theme =
+            ron::from_str("(rail: Some((visibility: Always)), key: (expire: Wipe))").unwrap();
+        assert_eq!(set.rail.unwrap().visibility, RailVisibility::Always);
+        assert_eq!(set.key.expire, Expiry::Wipe);
+        assert_eq!(Theme::default().key.expire, Expiry::Fade);
+        assert_eq!(
+            Theme::builtin(BuiltinTheme::Typewriter)
+                .rail
+                .unwrap()
+                .visibility,
+            RailVisibility::WithKeys
+        );
 
         let empty: Theme = ron::from_str("()").unwrap();
         assert_eq!(empty, Theme::default());

@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use crate::config::{IconStyle, OverlayPosition};
-use crate::theme::{self, Fill, Layout, RailStyle, Repeats, Theme};
+use crate::theme::{self, Expiry, Fill, Layout, RailStyle, RailVisibility, Repeats, Theme};
 use crate::widgets::Reveal;
 
 // Bundled font for keystroke text
@@ -805,15 +805,33 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         .iter()
         .filter(|k| !k.is_expired(fade_duration))
         .collect();
+    // The row shows this much, measured in single keys; older keys slide out past
+    // its far edge, fading as they cross it
+    let window = history_count as f32 * (key_size + theme.key.gap);
+    let visibility = theme.rail.map(|rail| rail.visibility);
     let Some(newest) = visible.last() else {
-        return widget::Space::new().into();
+        // A rail that's always visible stays, empty, at its full length
+        return match theme.rail {
+            Some(rail) if rail.visibility == RailVisibility::Always => on_rail(
+                widget::Space::new()
+                    .width(Length::Fixed(window))
+                    .height(Length::Fixed(key_size))
+                    .into(),
+                &rail,
+                1.0,
+            ),
+            _ => widget::Space::new().into(),
+        };
     };
 
-    // The rail fades out along with its newest key
-    let rail_opacity = visible
-        .iter()
-        .map(|k| k.opacity(fade_duration))
-        .fold(0.0, f32::max);
+    // The rail fades out along with its newest key, unless it's always visible
+    let rail_opacity = match visibility {
+        Some(RailVisibility::Always) => 1.0,
+        _ => visible
+            .iter()
+            .map(|k| key_opacity(theme, k, fade_duration))
+            .fold(0.0, f32::max),
+    };
 
     // Right-side and centered positions have the edge on the right, and the keys
     // run leftward; left-side positions mirror that
@@ -826,9 +844,6 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     );
     let gap = theme.key.gap;
     let (opening, arriving) = slide_phases(motion.shifted_at);
-    // The row shows this much, measured in single keys; older keys slide out past
-    // its far edge, fading as they cross it
-    let window = history_count as f32 * (key_size + gap);
 
     // While the held combination grows (Ctrl, then Ctrl + Shift…), the newest key
     // widens smoothly: its keys glide inward and the new one slides in from the edge
@@ -858,14 +873,14 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         } else {
             (1.0, 1.0, 0.0)
         };
-        let width = width.min(leaving(k, fade_duration));
+        let width = width.min(leaving(theme, k, fade_duration));
         if width <= 0.0 {
             continue;
         }
         let room = (key_width(k, key_size, theme) + gap) * width;
         // Fade out as the key crosses the far edge of the window
         let inside = ((window - distance) / room).clamp(0.0, 1.0);
-        let opacity = k.opacity(fade_duration) * dim * inside;
+        let opacity = key_opacity(theme, k, fade_duration) * dim * inside;
 
         let mut widget = keystroke_widget(k, key_size, opacity, theme, position, icon_style);
         if i == 0 && grown < 1.0 {
@@ -939,6 +954,18 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     )
     .max_width(window)
     .into();
+    // A rail at full length keeps the window's size, with the keys at the edge
+    let row: Element<'a, M> = match visibility {
+        Some(RailVisibility::Always | RailVisibility::WithKeys) => widget::container(row)
+            .width(Length::Fixed(window))
+            .align_x(if edge_on_right {
+                iced::alignment::Horizontal::Right
+            } else {
+                iced::alignment::Horizontal::Left
+            })
+            .into(),
+        _ => row,
+    };
 
     match theme.rail {
         None => row,
@@ -994,18 +1021,46 @@ fn slide_phases(shifted_at: Option<Instant>) -> (f32, f32) {
     )
 }
 
-/// A key's width while it expires: full, then closing up over its last moments,
-/// taking longer the more keys it has so every key closes at the same speed
-fn leaving(keystroke: &Keystroke, fade_duration: f32) -> f32 {
+/// The share of the visible time a wiping key spends wiping off
+const WIPE_SHARE: f32 = 0.3;
+
+/// A key's opacity as it ages: fading out, or fully visible until it's gone.
+/// A fading key finishes fading before it closes up, so the closing only moves
+/// empty space and never looks like a wipe.
+fn key_opacity(theme: &Theme, keystroke: &Keystroke, fade_duration: f32) -> f32 {
+    match theme.key.expire {
+        Expiry::Fade => {
+            let closing = expiring_secs(theme, keystroke, fade_duration);
+            keystroke.opacity(fade_duration - closing)
+        }
+        Expiry::Wipe | Expiry::Vanish if keystroke.is_expired(fade_duration) => 0.0,
+        Expiry::Wipe | Expiry::Vanish => 1.0,
+    }
+}
+
+/// A key's width as it expires. Fading keys close up over their last moments,
+/// taking longer the more keys they have so every key closes at the same speed.
+/// Wiping keys shrink from the far side over the end of their time. Vanishing
+/// keys keep their width until they're gone.
+fn leaving(theme: &Theme, keystroke: &Keystroke, fade_duration: f32) -> f32 {
     if keystroke.pressed {
         return 1.0;
     }
-    ((fade_duration - keystroke.age_secs()) / closing_secs(keystroke)).clamp(0.0, 1.0)
+    let secs = expiring_secs(theme, keystroke, fade_duration);
+    if secs <= 0.0 {
+        return 1.0;
+    }
+    ((fade_duration - keystroke.age_secs()) / secs).clamp(0.0, 1.0)
 }
 
-/// How long an expiring keystroke takes to close up
-pub fn closing_secs(keystroke: &Keystroke) -> f32 {
-    SLIDE_SECS * keystroke.keys.len().max(1) as f32
+/// How long before it expires a keystroke starts to shrink away (0 for none)
+pub fn expiring_secs(theme: &Theme, keystroke: &Keystroke, fade_duration: f32) -> f32 {
+    match theme.key.expire {
+        // Closing up takes longer for wider keys, but always leaves time to fade
+        Expiry::Fade => (SLIDE_SECS * keystroke.keys.len().max(1) as f32).min(fade_duration * 0.4),
+        Expiry::Wipe => fade_duration * WIPE_SHARE,
+        Expiry::Vanish => 0.0,
+    }
 }
 
 /// Put `content` on the theme's rail, faded to `opacity`
@@ -1186,7 +1241,12 @@ fn typewriter_line<'a, M: 'a>(
     let pieces = line_pieces(keystrokes.iter().filter(|k| !k.is_expired(fade_duration)));
     let text_color = theme.key.text.0;
     let mut children: Vec<Element<'a, M>> = Vec::new();
-    let mut rail_opacity: f32 = 0.0;
+    let visibility = theme.rail.map(|rail| rail.visibility);
+    let mut rail_opacity: f32 = if visibility == Some(RailVisibility::Always) {
+        1.0
+    } else {
+        0.0
+    };
     let mut x = 0.0;
 
     // A caret after text shows where the next letter goes
@@ -1225,14 +1285,17 @@ fn typewriter_line<'a, M: 'a>(
                 )
             }
         };
+        // Wiping pieces shrink from the far side as they expire
+        let shown = leaving(theme, keystroke, fade_duration);
+        let piece_width = piece_width * shown;
         // 1.0 until the piece reaches the fade zone, down to 0.0 at the line's far end
         let edge = ((width - x - piece_width) / (width - fade_from)).clamp(0.0, 1.0);
-        let age = keystroke.opacity(fade_duration);
+        let age = key_opacity(theme, keystroke, fade_duration);
         rail_opacity = rail_opacity.max(age);
         let opacity = age * edge;
         x += piece_width;
 
-        children.push(match piece {
+        let element: Element<'a, M> = match piece {
             LinePiece::Text(text, _) if text.starts_with(' ') => widget::Space::new()
                 .width(Length::Fixed(piece_width))
                 .into(),
@@ -1250,18 +1313,29 @@ fn typewriter_line<'a, M: 'a>(
             ))
             .padding([0.0, key_margin])
             .into(),
+        };
+        children.push(if shown < 1.0 {
+            Reveal::new(element, shown, true).into()
+        } else {
+            element
         });
     }
     children.reverse();
 
-    let line: Element<'a, M> =
+    let row =
         widget::container(widget::row::with_children(children).align_y(iced::Alignment::Center))
-            .width(Length::Fixed(width))
             .height(Length::Fixed(key_size))
+            .align_y(iced::alignment::Vertical::Center);
+    let line: Element<'a, M> = match visibility {
+        // Just around the text, up to the line's width
+        Some(RailVisibility::Grow) => Reveal::new(row, 1.0, true).max_width(width).into(),
+        // The full line
+        _ => row
+            .width(Length::Fixed(width))
             .align_x(iced::alignment::Horizontal::Right)
-            .align_y(iced::alignment::Vertical::Center)
             .clip(true)
-            .into();
+            .into(),
+    };
 
     match &theme.rail {
         Some(rail) => on_rail(line, rail, rail_opacity),
@@ -1312,6 +1386,37 @@ mod tests {
         // Backspace is shown as a key, not applied to the text
         assert_eq!(line(&typed), "Hello w[⌫][Ctrl+S][↵]@");
         assert_eq!(line(&[key("␣"), key("Tab"), key("⇧")]), " [Tab][⇧]");
+    }
+
+    #[test]
+    fn keys_expire_the_way_the_theme_says() {
+        use crate::config::BuiltinTheme;
+        let fade = 5.0;
+        let aged = |secs: f32| Keystroke {
+            timestamp: Instant::now() - std::time::Duration::from_secs_f32(secs),
+            ..Keystroke::single("a", false)
+        };
+        let mut theme = Theme::builtin(BuiltinTheme::Frosted);
+        let (early, late) = (aged(1.0), aged(4.8));
+
+        // Fade: fades out near the end, then closes up once it's invisible
+        assert_eq!(key_opacity(&theme, &early, fade), 1.0);
+        assert!(key_opacity(&theme, &aged(4.55), fade) < 0.5);
+        assert_eq!(leaving(&theme, &aged(4.55), fade), 1.0);
+        assert_eq!(key_opacity(&theme, &late, fade), 0.0);
+        assert!(leaving(&theme, &late, fade) < 1.0);
+
+        // Wipe: fully visible, shrinking over the last part of its time
+        theme.key.expire = Expiry::Wipe;
+        assert_eq!(key_opacity(&theme, &late, fade), 1.0);
+        assert_eq!(leaving(&theme, &early, fade), 1.0);
+        assert!(leaving(&theme, &aged(4.25), fade) < 0.6);
+
+        // Vanish: fully visible and full size until it's gone
+        theme.key.expire = Expiry::Vanish;
+        assert_eq!(key_opacity(&theme, &late, fade), 1.0);
+        assert_eq!(leaving(&theme, &late, fade), 1.0);
+        assert_eq!(key_opacity(&theme, &aged(5.1), fade), 0.0);
     }
 
     #[test]
