@@ -11,12 +11,12 @@ use cosmic::iced::{Alignment, Color, Length};
 use cosmic::widget::{self, segmented_button, settings};
 use cosmic::{Element, Task};
 
-use crate::color_picker::{color_picker, gradient_bar, Hsva};
+use crate::color_picker::{color_picker, gradient_editor, Hsva};
 use crate::config::{IconStyle, OverlayPosition};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke, ICON_KEYS};
 use crate::settings::{segmented_model, select_segment};
 use crate::theme::{
-    self, icon_file_stem, Fill, Hex, Layout, RailStyle, Repeats, Theme, ThemeChoice,
+    self, icon_file_stem, Fill, Hex, Layout, RailStyle, Repeats, Stop, Theme, ThemeChoice,
 };
 use crate::widgets::{fill_chip, stepper};
 use crate::{KiwiApp, Message};
@@ -58,16 +58,18 @@ impl ColorField {
     /// One color of the field: the only one, or the start (0) or end (1) of a gradient
     fn stop(self, theme: &Theme, stop: usize) -> Option<Hex> {
         match (self.get(theme)?, stop) {
-            (Fill::Solid(color), 0) | (Fill::Gradient(color, _), 0) => Some(color),
-            (Fill::Gradient(_, color), 1) => Some(color),
+            (Fill::Solid(color), 0) => Some(color),
+            (Fill::Gradient(start, _), 0) => Some(start.color),
+            (Fill::Gradient(_, end), 1) => Some(end.color),
             _ => None,
         }
     }
 
     fn set_stop(self, theme: &mut Theme, stop: usize, color: Hex) -> bool {
         let fill = match (self.get(theme), stop) {
-            (Some(Fill::Gradient(_, end)), 0) => Fill::Gradient(color, end),
-            (Some(Fill::Gradient(start, _)), 1) => Fill::Gradient(start, color),
+            // A new color keeps its spot along the gradient
+            (Some(Fill::Gradient(start, end)), 0) => Fill::Gradient(Stop { color, ..start }, end),
+            (Some(Fill::Gradient(start, end)), 1) => Fill::Gradient(start, Stop { color, ..end }),
             (_, 0) => Fill::Solid(color),
             _ => return false,
         };
@@ -166,6 +168,8 @@ pub enum CustomizeMessage {
     PickColor(ColorField, usize),
     /// Edit the start (0) or end (1) of the gradient being picked
     PickStop(usize),
+    /// Move the start (0) or end (1) color along the gradient being picked, 0 to 1
+    MoveStop(usize, f32),
     PickerChanged(Hsva),
     PickerHex(String),
     PickerDone,
@@ -387,6 +391,23 @@ impl KiwiApp {
                 }
                 return Task::none();
             }
+            M::MoveStop(stop, at) => {
+                let Some(picking) = &draft.picking else {
+                    return Task::none();
+                };
+                let field = picking.field;
+                let Some(Fill::Gradient(mut start, mut end)) = field.get(&draft.theme) else {
+                    return Task::none();
+                };
+                // The colors can meet (a hard edge) but not pass each other
+                let (start_at, end_at) = theme::stop_positions(&start, &end);
+                if stop == 0 {
+                    start.at = Some(at.min(end_at));
+                } else {
+                    end.at = Some(at.max(start_at));
+                }
+                field.set(&mut draft.theme, Some(Fill::Gradient(start, end)));
+            }
             M::PickerChanged(hsva) => {
                 let Some(picking) = &mut draft.picking else {
                     return Task::none();
@@ -425,8 +446,8 @@ impl KiwiApp {
             }
             M::ToggleGradient(field) => {
                 let fill = match field.get(&draft.theme) {
-                    Some(Fill::Solid(color)) => Fill::Gradient(color, color),
-                    Some(Fill::Gradient(start, _)) => Fill::Solid(start),
+                    Some(Fill::Solid(color)) => Fill::gradient(color, color),
+                    Some(Fill::Gradient(start, _)) => Fill::Solid(start.color),
                     None => return Task::none(),
                 };
                 field.set(&mut draft.theme, Some(fill));
@@ -575,7 +596,10 @@ pub fn view<'a>(
         if let Some(fill) = fill {
             let (start, end) = match fill {
                 Fill::Solid(color) => (color.0, None),
-                Fill::Gradient(start, end) => (start.0, Some(end.0)),
+                Fill::Gradient(start, end) => (
+                    start.color.0,
+                    Some((end.color.0, theme::stop_positions(&start, &end))),
+                ),
             };
             let open = draft.picking.as_ref().is_some_and(|p| p.field == field);
             row = row.push(fill_chip(
@@ -602,7 +626,7 @@ pub fn view<'a>(
         let mut panel = widget::Column::new().spacing(8);
         if field.allows_gradient() {
             let hint = if gradient {
-                "Click an end of the bar to edit that color"
+                "Click a marker to edit its color, drag it to move it"
             } else {
                 ""
             };
@@ -619,9 +643,13 @@ pub fn view<'a>(
             );
         }
         if let Some(Fill::Gradient(start, end)) = field.get(theme) {
-            panel = panel.push(gradient_bar(start.0, end.0, picking.stop, move |stop| {
-                send(CustomizeMessage::PickStop(stop))
-            }));
+            let (start_at, end_at) = theme::stop_positions(&start, &end);
+            panel = panel.push(gradient_editor(
+                [(start_at, start.color.0), (end_at, end.color.0)],
+                picking.stop,
+                move |stop| send(CustomizeMessage::PickStop(stop)),
+                move |stop, at| send(CustomizeMessage::MoveStop(stop, at)),
+            ));
         }
         Some(
             panel
@@ -950,12 +978,13 @@ fn preview<'a>(
                 count: 3,
                 ..key("A")
             },
+            key("LClick"),
             Keystroke::single("↵", true),
         ],
         Layout::Text => "git commit"
             .chars()
             .map(|c| key(&c.to_string()))
-            .chain([Keystroke::combination(&ctrl, "S", true)])
+            .chain([key("LClick"), Keystroke::combination(&ctrl, "S", true)])
             .collect(),
     };
     let sample = keystrokes_row::<Message>(
@@ -966,7 +995,8 @@ fn preview<'a>(
         260.0,
         // Right-aligned so the order reads left to right, like typing
         OverlayPosition::TopRight,
-        keys.len(),
+        // The row's length is in key widths; leave room for all of the sample
+        12,
         icon_style,
         crate::keystroke::Motion::default(),
     );
@@ -1031,7 +1061,19 @@ mod tests {
             Fill::Solid(_) => panic!("Frosted keys have a gradient"),
         };
         assert!(ColorField::KeyBackground.set_stop(&mut theme, 1, red));
-        assert_eq!(theme.key.background, Fill::Gradient(start, red));
+        assert_eq!(theme.key.background, Fill::Gradient(start, Stop::new(red)));
+        // A new color keeps its spot along the gradient
+        let end = Stop {
+            color: red,
+            at: Some(0.6),
+        };
+        theme.key.background = Fill::Gradient(start, end);
+        let blue = Hex::parse("#0000ff").unwrap();
+        assert!(ColorField::KeyBackground.set_stop(&mut theme, 1, blue));
+        assert_eq!(
+            theme.key.background,
+            Fill::Gradient(start, Stop { color: blue, ..end })
+        );
         // Solid fields have no second stop
         assert!(!ColorField::KeyText.set_stop(&mut theme, 1, red));
         // Setting the first stop of an empty divider adds one, but only with a rail
@@ -1044,7 +1086,7 @@ mod tests {
     #[test]
     fn fields_only_take_what_fits() {
         let mut theme = Theme::builtin(BuiltinTheme::Frosted);
-        let gradient = Some(Fill::Gradient(
+        let gradient = Some(Fill::gradient(
             Hex::parse("#000000").unwrap(),
             Hex::parse("#ffffff").unwrap(),
         ));

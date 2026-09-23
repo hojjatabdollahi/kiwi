@@ -764,9 +764,10 @@ fn fill_background(fill: Fill, opacity: f32) -> Background {
     match fill {
         Fill::Solid(color) => Background::Color(fade(color.0)),
         Fill::Gradient(start, end) => {
+            let (start_at, end_at) = theme::stop_positions(&start, &end);
             let grad = gradient::Linear::new(std::f32::consts::PI / 4.0) // 45 degree angle
-                .add_stop(0.0, fade(start.0))
-                .add_stop(1.0, fade(end.0));
+                .add_stop(start_at, fade(start.color.0))
+                .add_stop(end_at, fade(end.color.0));
             Background::Gradient(gradient::Gradient::Linear(grad))
         }
     }
@@ -1034,7 +1035,11 @@ fn with_border<'a, M: 'a>(
     };
     let (solid, gradient) = match border.color {
         Fill::Solid(color) => (fade(color.0), None),
-        Fill::Gradient(start, end) => (Color::TRANSPARENT, Some((fade(start.0), fade(end.0)))),
+        Fill::Gradient(start, end) => {
+            let (start_at, end_at) = theme::stop_positions(&start, &end);
+            let stops = [(start_at, fade(start.color.0)), (end_at, fade(end.color.0))];
+            (Color::TRANSPARENT, Some(stops))
+        }
     };
     let container = container.class(cosmic::theme::Container::custom(move |_| {
         container::Style {
@@ -1053,11 +1058,10 @@ fn with_border<'a, M: 'a>(
     }));
     match gradient {
         None => container.into(),
-        Some((start, end)) => cosmic::iced::widget::stack![
+        Some(stops) => cosmic::iced::widget::stack![
             container,
             widget::Canvas::new(GradientBorder {
-                start,
-                end,
+                stops,
                 width: border.width,
                 radius,
             })
@@ -1070,8 +1074,8 @@ fn with_border<'a, M: 'a>(
 
 /// A rounded outline drawn with a 45° gradient
 struct GradientBorder {
-    start: Color,
-    end: Color,
+    /// The gradient's two colors and where they sit, from 0 to 1
+    stops: [(f32, Color); 2],
     width: f32,
     radius: f32,
 }
@@ -1102,8 +1106,8 @@ impl<M> widget::canvas::Program<M, cosmic::Theme> for GradientBorder {
             iced::Point::ORIGIN,
             iced::Point::new(bounds.width, bounds.height),
         )
-        .add_stop(0.0, self.start)
-        .add_stop(1.0, self.end);
+        .add_stop(self.stops[0].0, self.stops[0].1)
+        .add_stop(self.stops[1].0, self.stops[1].1);
         frame.stroke(
             &outline,
             widget::canvas::Stroke {

@@ -2,10 +2,9 @@
 //! arrange toolbar: a −/+ stepper and a color chip.
 
 use std::borrow::Cow;
-use std::f32::consts::PI;
 
-use cosmic::iced::{mouse, Alignment, Color, Length, Radians, Rectangle};
-use cosmic::widget::canvas::{self, path::Arc, Frame, Path, Stroke};
+use cosmic::iced::{mouse, Alignment, Color, Length, Rectangle};
+use cosmic::widget::canvas::{self, Frame, Path, Stroke};
 use cosmic::widget::{self, button, container};
 use cosmic::Element;
 
@@ -49,10 +48,11 @@ pub fn stepper<'a, M: Clone + 'static>(
 }
 
 /// A pill showing a color or a gradient and its hex codes: a round swatch and
-/// "#ffffff38" for one color, a gradient swatch and "#4d5973b8 → #33405966" for two
+/// "#ffffff38" for one color, a gradient swatch and "#4d5973b8 → #33405966" for a
+/// gradient. `end` is the gradient's end color and where its two colors sit (0-1).
 pub fn fill_chip<'a, M: Clone + 'static>(
     start: Color,
-    end: Option<Color>,
+    end: Option<(Color, (f32, f32))>,
     selected: bool,
     on_press: M,
 ) -> Element<'a, M> {
@@ -60,19 +60,32 @@ pub fn fill_chip<'a, M: Clone + 'static>(
         let [r, g, b, a] = color.into_rgba8();
         format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
     };
+    // The color is drawn over a checkerboard of the same shape, so any
+    // transparency shows
+    let on_checkers = |width: f32, color: Element<'a, M>| -> Element<'a, M> {
+        cosmic::iced::widget::stack![checkered_pill(width, 20.0), color].into()
+    };
     let (swatch, label): (Element<'a, M>, String) = match end {
         None => (
-            widget::Canvas::new(RoundSwatch(start))
-                .width(Length::Fixed(20.0))
-                .height(Length::Fixed(20.0))
-                .into(),
+            on_checkers(
+                20.0,
+                widget::Canvas::new(RoundSwatch(start))
+                    .width(Length::Fixed(20.0))
+                    .height(Length::Fixed(20.0))
+                    .into(),
+            ),
             hex(start),
         ),
-        Some(end) => (
-            widget::Canvas::new(GradientSwatch { start, end })
+        Some((end, (start_at, end_at))) => (
+            on_checkers(
+                36.0,
+                widget::Canvas::new(GradientSwatch {
+                    stops: [(start_at, start), (end_at, end)],
+                })
                 .width(Length::Fixed(36.0))
                 .height(Length::Fixed(20.0))
                 .into(),
+            ),
             format!("{} → {}", hex(start), hex(end)),
         ),
     };
@@ -89,10 +102,32 @@ pub fn fill_chip<'a, M: Clone + 'static>(
         .into()
 }
 
+/// A checkerboard in a pill shape (a circle when it's square), to put a color on
+/// so its transparency shows. It's an SVG because a canvas can only clip to
+/// rectangles, and SVG can clip the pattern to the round ends.
+fn checkered_pill<'a, M: 'a>(width: f32, height: f32) -> Element<'a, M> {
+    let radius = height / 2.0 - 1.0;
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\">\
+         <defs><pattern id=\"c\" width=\"8\" height=\"8\" patternUnits=\"userSpaceOnUse\">\
+         <rect width=\"8\" height=\"8\" fill=\"#cccccc\"/>\
+         <rect width=\"4\" height=\"4\" fill=\"#999999\"/>\
+         <rect x=\"4\" y=\"4\" width=\"4\" height=\"4\" fill=\"#999999\"/>\
+         </pattern></defs>\
+         <rect x=\"1\" y=\"1\" width=\"{w}\" height=\"{h}\" rx=\"{radius}\" fill=\"url(#c)\"/></svg>",
+        w = width - 2.0,
+        h = height - 2.0,
+    );
+    widget::svg(widget::svg::Handle::from_memory(svg.into_bytes()))
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(height))
+        .into()
+}
+
 /// A gradient in a pill shape, left to right, over a checkerboard so transparency shows
 struct GradientSwatch {
-    start: Color,
-    end: Color,
+    /// The two colors and where they sit, from 0 to 1
+    stops: [(f32, Color); 2],
 }
 
 impl<M> canvas::Program<M, cosmic::Theme> for GradientSwatch {
@@ -116,18 +151,9 @@ impl<M> canvas::Program<M, cosmic::Theme> for GradientSwatch {
             Size::new(bounds.width - 2.0, bounds.height - 2.0),
             radius.into(),
         );
-        // Checkered between the round ends (the canvas can only clip to rectangles)
-        frame.fill(&pill, Color::from_rgb8(204, 204, 204));
-        frame.with_clip(
-            Rectangle::new(
-                Point::new(radius, 1.0),
-                Size::new(bounds.width - 2.0 * radius, bounds.height - 2.0),
-            ),
-            |frame| crate::color_picker::checkerboard(frame, bounds.size()),
-        );
         let gradient = Linear::new(Point::ORIGIN, Point::new(bounds.width, 0.0))
-            .add_stop(0.0, self.start)
-            .add_stop(1.0, self.end);
+            .add_stop(self.stops[0].0, self.stops[0].1)
+            .add_stop(self.stops[1].0, self.stops[1].1);
         frame.fill(&pill, gradient);
         frame.stroke(
             &pill,
@@ -158,21 +184,6 @@ impl<M> canvas::Program<M, cosmic::Theme> for RoundSwatch {
         let radius = bounds.width.min(bounds.height) / 2.0 - 1.0;
         let circle = Path::circle(center, radius);
 
-        // Checkered: light, with two dark quarters
-        frame.fill(&circle, Color::from_rgb8(204, 204, 204));
-        for start in [PI, 0.0] {
-            let quarter = Path::new(|p| {
-                p.move_to(center);
-                p.arc(Arc {
-                    center,
-                    radius,
-                    start_angle: Radians(start),
-                    end_angle: Radians(start + PI / 2.0),
-                });
-                p.close();
-            });
-            frame.fill(&quarter, Color::from_rgb8(153, 153, 153));
-        }
         frame.fill(&circle, self.0);
         frame.stroke(
             &Path::circle(center, radius),

@@ -29,7 +29,7 @@ use cosmic::widget::about::About;
 use crossbeam_channel::{Receiver as CbReceiver, Sender as CbSender};
 use wayland_client::protocol::wl_output::WlOutput;
 
-use config::{Config, OverlayPosition, APP_ID};
+use config::{Config, APP_ID};
 use overlay::{
     create_layer_surface_for_output, destroy_surface, view_overlay, OutputState, SharedState,
 };
@@ -139,7 +139,6 @@ pub enum Message {
     ExportThemeTo(std::path::PathBuf),
     ThemeMessage(String),
     Customize(customize::CustomizeMessage),
-    SetPosition(OverlayPosition),
     DisplayModeTab(widget::segmented_button::Entity),
     IconStyleTab(widget::segmented_button::Entity),
     /// Switch what the theme previews are drawn on
@@ -148,13 +147,12 @@ pub enum Message {
     CustomizeTheme(ThemeChoice),
     // Arrange mode
     StartArranging,
-    /// The keys being dragged by this much while arranging (`None` when let go)
-    ArrangeDrag(Option<cosmic::iced::Vector>),
+    /// Put the newest key here, as fractions of the screen (dragging in arrange mode)
+    MoveKeys(f32, f32),
     FinishArranging,
     CancelArranging,
     ResetArrangement,
     NudgeSize(f32),
-    NudgeMargin(f32),
     NudgeLength(i32),
     SetShowKeyboard(bool),
     SetShowMouse(bool),
@@ -197,6 +195,8 @@ impl cosmic::Application for KiwiApp {
         // rejects with a "corner radius too large" protocol error, killing the
         // Wayland connection. Window/popup corner radii are left untouched.
         core.set_auto_corner_radius(cosmic::core::Auto::Window | cosmic::core::Auto::Popup);
+        // The header bar draws this at the standard COSMIC title size
+        core.set_header_title("Kiwi".to_string());
 
         // Load config
         let config_handler = cosmic_config::Config::new(APP_ID, Config::VERSION).ok();
@@ -273,10 +273,6 @@ impl cosmic::Application for KiwiApp {
 
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
         vec![]
-    }
-
-    fn header_center(&self) -> Vec<Element<'_, Self::Message>> {
-        vec![widget::text::title3("Kiwi").into()]
     }
 
     fn header_end(&self) -> Vec<Element<'_, Self::Message>> {
@@ -607,20 +603,9 @@ impl cosmic::Application for KiwiApp {
             }
             Message::ThemeMessage(message) => self.theme_message = Some(message),
             Message::Customize(message) => return self.update_customize(message),
-            Message::SetPosition(position) => {
-                self.config.position = position;
-                if let Ok(mut state) = self.shared_state.lock() {
-                    state.drag_offset = None;
-                }
+            Message::MoveKeys(x, y) => {
+                self.config.anchor = Some((x, y));
                 self.apply_arrangement();
-            }
-            Message::ArrangeDrag(offset) => {
-                if let Some(arranging) = &mut self.arranging {
-                    arranging.last_input = std::time::Instant::now();
-                }
-                if let Ok(mut state) = self.shared_state.lock() {
-                    state.drag_offset = offset;
-                }
             }
             Message::StartArranging => {
                 if self.arranging.is_none() {
@@ -645,7 +630,7 @@ impl cosmic::Application for KiwiApp {
                 let defaults = Config::default();
                 self.config.key_size = default_size;
                 self.config.position = defaults.position;
-                self.config.margin = defaults.margin;
+                self.config.anchor = defaults.anchor;
                 self.config.line_width = None;
                 if layout == theme::Layout::Keys {
                     self.config.history_count = defaults.history_count;
@@ -654,10 +639,6 @@ impl cosmic::Application for KiwiApp {
             }
             Message::NudgeSize(delta) => {
                 self.config.key_size = (self.config.key_size + delta).clamp(32.0, 160.0);
-                self.apply_arrangement();
-            }
-            Message::NudgeMargin(delta) => {
-                self.config.margin = (self.config.margin + delta).clamp(0.0, 400.0);
                 self.apply_arrangement();
             }
             Message::NudgeLength(steps) => {
@@ -1023,7 +1004,7 @@ impl KiwiApp {
         if !keep {
             let before = arranging.before;
             self.config.position = before.position;
-            self.config.margin = before.margin;
+            self.config.anchor = before.anchor;
             self.config.key_size = before.key_size;
             self.config.line_width = before.line_width;
             self.config.history_count = before.history_count;

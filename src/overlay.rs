@@ -63,16 +63,14 @@ pub struct SharedState {
     pub theme: Arc<Theme>,
     /// Overlay position
     pub position: OverlayPosition,
-    /// Distance between the keys and the screen edge
-    pub margin: f32,
+    /// Where the newest key sits, as fractions of the screen's width and height
+    pub anchor: (f32, f32),
     /// Typewriter line width, overriding the theme's
     pub line_width: Option<f32>,
     /// Arrange mode: the overlay takes input and shows sample keys, snap spots and a toolbar
     pub arranging: bool,
     /// A theme preview playing on the overlay
     pub preview: Option<Preview>,
-    /// How far the keys have been dragged from their spot, while arranging
-    pub drag_offset: Option<cosmic::iced::Vector>,
     /// Last frame: how many finished keystrokes were showing, whether a held
     /// keystroke was showing after them, and how many keys that held one had
     row_len: usize,
@@ -126,8 +124,8 @@ impl SharedState {
             self.theme = Arc::new(theme_choice.load(&crate::theme::themes_dir()));
             self.theme_choice = theme_choice;
         }
-        self.position = config.position;
-        self.margin = config.margin;
+        self.anchor = config.anchor();
+        self.position = OverlayPosition::from_anchor(self.anchor);
         self.line_width = config.line_width;
         self.key_display_mode = config.key_display_mode;
         self.icon_style = config.icon_style;
@@ -219,11 +217,10 @@ impl Default for SharedState {
             theme_choice: ThemeChoice::Builtin(crate::config::BuiltinTheme::Frosted),
             theme: Arc::new(Theme::default()),
             position: OverlayPosition::TopRight,
-            margin: 20.0,
+            anchor: (0.99, 0.02),
             line_width: None,
             arranging: false,
             preview: None,
-            drag_offset: None,
             row_len: 0,
             was_held: false,
             held_parts: 0,
@@ -398,13 +395,12 @@ struct Snapshot {
     fade_duration: f32,
     theme: Arc<Theme>,
     position: OverlayPosition,
-    margin: f32,
+    anchor: (f32, f32),
     line_width: Option<f32>,
     history_count: u8,
     icon_style: IconStyle,
     touches: Vec<TouchPoint>,
     arranging: bool,
-    drag_offset: cosmic::iced::Vector,
     motion: crate::keystroke::Motion,
 }
 
@@ -465,13 +461,12 @@ impl Snapshot {
             fade_duration: s.fade_duration,
             theme,
             position: s.position,
-            margin: s.margin,
+            anchor: s.anchor,
             line_width: s.line_width,
             history_count: s.history_count,
             icon_style: s.icon_style,
             touches,
             arranging: s.arranging,
-            drag_offset: s.drag_offset.unwrap_or_default(),
             motion: crate::keystroke::Motion {
                 shifted_at: s.shifted_at,
                 slot_grew: s.slot_grew,
@@ -649,13 +644,18 @@ pub fn view_overlay(
         return cosmic::widget::Space::new().into();
     };
 
-    let (v_align, h_align) = match frame.position {
-        OverlayPosition::TopLeft => (Vertical::Top, Horizontal::Left),
-        OverlayPosition::TopCenter => (Vertical::Top, Horizontal::Center),
-        OverlayPosition::TopRight => (Vertical::Top, Horizontal::Right),
-        OverlayPosition::BottomLeft => (Vertical::Bottom, Horizontal::Left),
-        OverlayPosition::BottomCenter => (Vertical::Bottom, Horizontal::Center),
-        OverlayPosition::BottomRight => (Vertical::Bottom, Horizontal::Right),
+    // The keys grow from the anchor toward the middle of the screen
+    let (ax, ay) = frame.anchor;
+    let (on_right, on_bottom) = (ax > 0.5, ay > 0.5);
+    let h_align = if on_right {
+        Horizontal::Right
+    } else {
+        Horizontal::Left
+    };
+    let v_align = if on_bottom {
+        Vertical::Bottom
+    } else {
+        Vertical::Top
     };
 
     let content: cosmic::Element<'static, Message> = if frame.keystrokes.is_empty() {
@@ -680,43 +680,53 @@ pub fn view_overlay(
         content
     };
 
-    // While dragging, the padding on the aligned side follows the pointer so
-    // the keys move with it
-    let margin = frame.margin;
-    let offset = frame.drag_offset;
-    let (top, bottom) = match v_align {
-        Vertical::Top => (margin + offset.y, margin),
-        _ => (margin, margin - offset.y),
-    };
-    let (left, right) = match h_align {
-        Horizontal::Left => (margin + offset.x, margin),
-        Horizontal::Right => (margin, margin - offset.x),
-        // Centered: the horizontal offset is handled by `centered` below
-        _ => (0.0, 0.0),
-    };
-    let content = if h_align == Horizontal::Center {
-        centered(content, offset.x)
+    // Put the anchor at its share of the screen: the space on either side of it
+    // is split in that ratio, and the keys hug the anchor's side of the split
+    use cosmic::iced::Length::{Fill, FillPortion};
+    use cosmic::widget::{container, Column, Row, Space};
+    let share = |fraction: f32| ((fraction.clamp(0.0, 1.0) * 1000.0).round() as u16).max(1);
+    let row = if on_right {
+        Row::new()
+            .push(
+                container(content)
+                    .width(FillPortion(share(ax)))
+                    .align_x(h_align),
+            )
+            .push(Space::new().width(FillPortion(share(1.0 - ax))))
     } else {
-        content
+        Row::new()
+            .push(Space::new().width(FillPortion(share(ax))))
+            .push(
+                container(content)
+                    .width(FillPortion(share(1.0 - ax)))
+                    .align_x(h_align),
+            )
     };
-    let keystroke_layer: cosmic::Element<'static, Message> = cosmic::widget::container(content)
-        .width(cosmic::iced::Length::Fill)
-        .height(cosmic::iced::Length::Fill)
-        .align_x(h_align)
-        .align_y(v_align)
-        .padding(cosmic::iced::Padding {
-            top: top.max(0.0),
-            right: right.max(0.0),
-            bottom: bottom.max(0.0),
-            left: left.max(0.0),
-        })
-        .into();
+    let row = row.width(Fill);
+    let keystroke_layer: cosmic::Element<'static, Message> = if on_bottom {
+        Column::new()
+            .push(
+                container(row)
+                    .height(FillPortion(share(ay)))
+                    .align_y(v_align),
+            )
+            .push(Space::new().height(FillPortion(share(1.0 - ay))))
+    } else {
+        Column::new()
+            .push(Space::new().height(FillPortion(share(ay))))
+            .push(
+                container(row)
+                    .height(FillPortion(share(1.0 - ay)))
+                    .align_y(v_align),
+            )
+    }
+    .width(Fill)
+    .height(Fill)
+    .into();
 
     if frame.arranging {
         let spots = cosmic::widget::Canvas::new(ArrangeCanvas {
-            position: frame.position,
-            margin: frame.margin,
-            key_size: frame.key_size,
+            anchor: frame.anchor,
         })
         .width(cosmic::iced::Length::Fill)
         .height(cosmic::iced::Length::Fill);
@@ -742,32 +752,6 @@ pub fn view_overlay(
     .height(cosmic::iced::Length::Fill);
 
     cosmic::iced::widget::stack![touch_layer, keystroke_layer].into()
-}
-
-/// Center positions: the keys end at the middle of the screen and grow leftward
-/// only, so nothing shifts in both directions as keys come and go. `dx` moves
-/// them sideways while they're dragged.
-fn centered(
-    content: cosmic::Element<'static, Message>,
-    dx: f32,
-) -> cosmic::Element<'static, Message> {
-    use cosmic::iced::Length;
-    use cosmic::widget;
-
-    // Two halves split the space that's left; fixed space before them (or
-    // between them) moves the middle right (or left) by half its width
-    let shift = widget::Space::new().width(Length::Fixed(2.0 * dx.abs()));
-    let left_half = widget::container(content)
-        .width(Length::Fill)
-        .align_x(cosmic::iced::alignment::Horizontal::Right);
-    let right_half = widget::Space::new().width(Length::Fill);
-    let row = widget::Row::new();
-    let row = if dx >= 0.0 {
-        row.push(shift).push(left_half).push(right_half)
-    } else {
-        row.push(left_half).push(shift).push(right_half)
-    };
-    row.width(Length::Fill).into()
 }
 
 /// Let a surface take pointer and keyboard input (for arrange mode), or make it click-through again
@@ -798,80 +782,23 @@ pub fn set_interactive(
     ])
 }
 
-/// Where the keys would sit for each position, as a drop target in arrange mode
-fn spot_bounds(
-    position: OverlayPosition,
-    bounds: cosmic::iced::Rectangle,
-    margin: f32,
-    key_size: f32,
-) -> cosmic::iced::Rectangle {
-    let side_width = (bounds.width * 0.28).min(360.0);
-    // The keys end at the middle of the screen, so the center spot runs leftward
-    // from there, stopping short of the left spot
-    let center_width = side_width.min(bounds.width / 2.0 - margin - side_width - 12.0);
-    let height = key_size * 1.6;
-    let (x, width) = match position {
-        OverlayPosition::TopLeft | OverlayPosition::BottomLeft => (margin, side_width),
-        OverlayPosition::TopCenter | OverlayPosition::BottomCenter => {
-            (bounds.width / 2.0 - center_width, center_width)
-        }
-        OverlayPosition::TopRight | OverlayPosition::BottomRight => {
-            (bounds.width - side_width - margin, side_width)
-        }
-    };
-    let y = match position {
-        OverlayPosition::TopLeft | OverlayPosition::TopCenter | OverlayPosition::TopRight => margin,
-        _ => bounds.height - height - margin,
-    };
-    cosmic::iced::Rectangle {
-        x,
-        y,
-        width,
-        height,
-    }
-}
-
-/// Arrange mode: dims the screen and draws the six spots the keys can snap to.
-/// Pressing on a spot and releasing on another (or clicking one) moves the keys there.
+/// Arrange mode: dims the screen, marks the anchor, and moves the keys with any
+/// drag on it, from wherever the drag starts
 #[derive(Debug)]
 struct ArrangeCanvas {
-    position: OverlayPosition,
-    margin: f32,
-    key_size: f32,
+    anchor: (f32, f32),
 }
 
-impl ArrangeCanvas {
-    fn spot_at(
-        &self,
-        bounds: cosmic::iced::Rectangle,
-        cursor: cosmic::iced::mouse::Cursor,
-    ) -> Option<OverlayPosition> {
-        let point = cursor.position_in(bounds)?;
-        let local = cosmic::iced::Rectangle {
-            x: 0.0,
-            y: 0.0,
-            ..bounds
-        };
-        crate::config::OverlayPosition::ALL
-            .iter()
-            .copied()
-            .find(|p| spot_bounds(*p, local, self.margin, self.key_size).contains(point))
-    }
-}
-
-/// A press on a spot, which a release completes as a click or a drag
+/// A drag in progress: where the pointer went down and where the anchor was then
 #[derive(Debug, Default)]
-struct Press {
-    spot: Option<OverlayPosition>,
-    origin: cosmic::iced::Point,
-}
+struct Drag(Option<(cosmic::iced::Point, (f32, f32))>);
 
 impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for ArrangeCanvas {
-    type State = Press;
+    type State = Drag;
 
     fn update(
         &self,
-        press: &mut Press,
+        drag: &mut Drag,
         event: &cosmic::iced::Event,
         bounds: cosmic::iced::Rectangle,
         cursor: cosmic::iced::mouse::Cursor,
@@ -880,145 +807,61 @@ impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for ArrangeCanvas {
         use cosmic::widget::canvas::Action;
         match event {
             cosmic::iced::Event::Mouse(Mouse::ButtonPressed(Button::Left)) => {
-                press.spot = Some(self.spot_at(bounds, cursor)?);
-                press.origin = cursor.position()?;
+                drag.0 = Some((cursor.position_over(bounds)?, self.anchor));
                 Some(Action::capture())
             }
+            cosmic::iced::Event::Mouse(Mouse::CursorMoved { position }) => {
+                let (origin, (x, y)) = drag.0?;
+                // The keys move with the pointer, as a share of the screen
+                let x = (x + (position.x - origin.x) / bounds.width).clamp(0.0, 1.0);
+                let y = (y + (position.y - origin.y) / bounds.height).clamp(0.0, 1.0);
+                Some(Action::publish(Message::MoveKeys(x, y)).and_capture())
+            }
             cosmic::iced::Event::Mouse(Mouse::ButtonReleased(Button::Left)) => {
-                press.spot.take()?;
-                Some(
-                    Action::publish(match self.spot_at(bounds, cursor) {
-                        Some(spot) => Message::SetPosition(spot),
-                        // Dropped between spots: the keys go back where they were
-                        None => Message::ArrangeDrag(None),
-                    })
-                    .and_capture(),
-                )
+                drag.0.take()?;
+                Some(Action::capture())
             }
-            // Dragging the keys from their own spot moves them with the pointer
-            cosmic::iced::Event::Mouse(Mouse::CursorMoved { position })
-                if press.spot == Some(self.position) =>
-            {
-                let offset = *position - press.origin;
-                Some(Action::publish(Message::ArrangeDrag(Some(offset))).and_capture())
-            }
-            // Otherwise just redraw so the spot under the pointer lights up
-            cosmic::iced::Event::Mouse(Mouse::CursorMoved { .. }) => Some(Action::request_redraw()),
             _ => None,
         }
     }
 
     fn draw(
         &self,
-        press: &Press,
+        _drag: &Drag,
         renderer: &cosmic::Renderer,
         theme: &cosmic::Theme,
         bounds: cosmic::iced::Rectangle,
-        cursor: cosmic::iced::mouse::Cursor,
+        _cursor: cosmic::iced::mouse::Cursor,
     ) -> Vec<cosmic::widget::canvas::Geometry> {
-        use cosmic::iced::Color;
-        use cosmic::widget::canvas::{Frame, LineDash, Path, Stroke};
+        use cosmic::iced::{Color, Point};
+        use cosmic::widget::canvas::{Frame, Path, Stroke};
 
         let mut frame = Frame::new(renderer, bounds.size());
-        let local = cosmic::iced::Rectangle {
-            x: 0.0,
-            y: 0.0,
-            ..bounds
-        };
         frame.fill_rectangle(
-            local.position(),
-            local.size(),
+            Point::ORIGIN,
+            bounds.size(),
             Color::from_rgba(0.0, 0.0, 0.0, 0.35),
         );
-
+        // A ring where the newest key sits
         let accent = Color::from(theme.cosmic().accent_color());
-        let hovered = self.spot_at(bounds, cursor);
-        for position in crate::config::OverlayPosition::ALL.iter().copied() {
-            let spot = spot_bounds(position, local, self.margin, self.key_size);
-            let path = Path::rounded_rectangle(spot.position(), spot.size(), 10.0.into());
-            if position == self.position {
-                frame.fill(&path, with_opacity(accent, 0.15));
-                frame.stroke(&path, Stroke::default().with_color(accent).with_width(2.0));
-            } else if hovered == Some(position) {
-                let highlight = if press.spot.is_some() { 0.2 } else { 0.08 };
-                frame.fill(&path, with_opacity(Color::WHITE, highlight));
-                frame.stroke(
-                    &path,
-                    Stroke::default().with_color(Color::WHITE).with_width(2.0),
-                );
-            } else {
-                frame.stroke(
-                    &path,
-                    Stroke {
-                        line_dash: LineDash {
-                            segments: &[6.0, 5.0],
-                            offset: 0,
-                        },
-                        ..Stroke::default()
-                            .with_color(with_opacity(Color::WHITE, 0.5))
-                            .with_width(1.5)
-                    },
-                );
-            }
-        }
-
-        // A dashed guide from the keys' spot to the nearest screen edge, with the distance
-        let spot = spot_bounds(self.position, local, self.margin, self.key_size);
-        let (from, to, label_at) = match self.position {
-            OverlayPosition::TopLeft | OverlayPosition::BottomLeft => {
-                let y = spot.center_y();
-                ((0.0, y), (spot.x, y), (4.0, y + 6.0))
-            }
-            OverlayPosition::TopRight | OverlayPosition::BottomRight => {
-                let y = spot.center_y();
-                let right = spot.x + spot.width;
-                ((right, y), (local.width, y), (right + 4.0, y + 6.0))
-            }
-            OverlayPosition::TopCenter => {
-                let x = spot.center_x();
-                ((x, 0.0), (x, spot.y), (x + 6.0, 2.0))
-            }
-            OverlayPosition::BottomCenter => {
-                let x = spot.center_x();
-                let bottom = spot.y + spot.height;
-                ((x, bottom), (x, local.height), (x + 6.0, bottom + 2.0))
-            }
-        };
-        let kiwi = Color::from_rgb8(0xd9, 0xfb, 0x69);
-        if self.margin > 0.0 {
-            frame.stroke(
-                &Path::line(from.into(), to.into()),
-                Stroke {
-                    line_dash: LineDash {
-                        segments: &[4.0, 3.0],
-                        offset: 0,
-                    },
-                    ..Stroke::default().with_color(kiwi).with_width(1.5)
-                },
-            );
-        }
-        frame.fill_text(cosmic::widget::canvas::Text {
-            content: format!("{:.0} px from edge", self.margin),
-            position: label_at.into(),
-            color: kiwi,
-            size: 13.0.into(),
-            ..Default::default()
-        });
+        let anchor = Point::new(self.anchor.0 * bounds.width, self.anchor.1 * bounds.height);
+        frame.stroke(
+            &Path::circle(anchor, 5.0),
+            Stroke::default().with_color(accent).with_width(2.0),
+        );
         vec![frame.into_geometry()]
     }
 
     fn mouse_interaction(
         &self,
-        press: &Press,
-        bounds: cosmic::iced::Rectangle,
-        cursor: cosmic::iced::mouse::Cursor,
+        drag: &Drag,
+        _bounds: cosmic::iced::Rectangle,
+        _cursor: cosmic::iced::mouse::Cursor,
     ) -> cosmic::iced::mouse::Interaction {
-        use cosmic::iced::mouse::Interaction;
-        match self.spot_at(bounds, cursor) {
-            Some(_) if press.spot.is_some() => Interaction::Grabbing,
-            Some(spot) if spot == self.position => Interaction::Grab,
-            Some(_) => Interaction::Pointer,
-            None => Interaction::default(),
+        if drag.0.is_some() {
+            cosmic::iced::mouse::Interaction::Grabbing
+        } else {
+            cosmic::iced::mouse::Interaction::Grab
         }
     }
 }
@@ -1113,12 +956,6 @@ fn arrange_toolbar(frame: &Snapshot) -> cosmic::Element<'static, Message> {
                 Some(Message::NudgeLength(-1)),
                 Some(Message::NudgeLength(1)),
             ))
-            .push(stepper(
-                format!("{:.0} px from edge", frame.margin),
-                120.0,
-                (frame.margin > 0.0).then_some(Message::NudgeMargin(-4.0)),
-                Some(Message::NudgeMargin(4.0)),
-            ))
             .push(divider())
             .push(widget::button::standard("Reset").on_press(Message::ResetArrangement))
             .push(widget::button::suggested("Done").on_press(Message::FinishArranging)),
@@ -1147,10 +984,13 @@ fn arrange_toolbar(frame: &Snapshot) -> cosmic::Element<'static, Message> {
         .align_x(cosmic::iced::Alignment::Center)
         .push(pill)
         .push(
-            widget::text::caption("Esc cancels. Leaves on its own after a minute without input.")
-                .class(cosmic::theme::Text::Color(cosmic::iced::Color::from_rgba(
-                    1.0, 1.0, 1.0, 0.85,
-                ))),
+            widget::text::caption(
+                "Drag anywhere to move the keys. Esc cancels. \
+                 Leaves on its own after a minute without input.",
+            )
+            .class(cosmic::theme::Text::Color(cosmic::iced::Color::from_rgba(
+                1.0, 1.0, 1.0, 0.85,
+            ))),
         )
         .into()
 }
@@ -1270,28 +1110,5 @@ mod tests {
         assert_eq!(live_keystrokes(&state).0.len(), 1);
         state.key_pressed_with_modifiers = false;
         assert_eq!(live_keystrokes(&state).0.len(), 2);
-    }
-
-    #[test]
-    fn snap_spots_fit_and_dont_overlap() {
-        for (width, height) in [(1920.0, 1080.0), (1280.0, 800.0)] {
-            let screen = cosmic::iced::Rectangle {
-                x: 0.0,
-                y: 0.0,
-                width,
-                height,
-            };
-            let spots: Vec<_> = OverlayPosition::ALL
-                .iter()
-                .map(|p| spot_bounds(*p, screen, 20.0, 160.0))
-                .collect();
-            for (i, a) in spots.iter().enumerate() {
-                assert!(a.x >= 0.0 && a.y >= 0.0);
-                assert!(a.x + a.width <= width && a.y + a.height <= height);
-                for b in &spots[i + 1..] {
-                    assert!(a.intersection(b).is_none(), "{a:?} overlaps {b:?}");
-                }
-            }
-        }
     }
 }

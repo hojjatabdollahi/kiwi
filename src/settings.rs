@@ -133,11 +133,8 @@ pub fn settings_view(app: &KiwiApp) -> Element<'_, Message> {
         _ => format!("{} keys long", config.history_count),
     };
     let placement = settings::section().title("Position and size").add(
-        settings::item::builder(config.position.name())
-            .description(format!(
-                "{:.0} px from the edge, {:.0} px keys, {length}",
-                config.margin, config.key_size
-            ))
+        settings::item::builder("Drag the keys anywhere on screen")
+            .description(format!("{:.0} px keys, {length}", config.key_size))
             .control(
                 widget::button::suggested("Adjust on screen").on_press(Message::StartArranging),
             ),
@@ -308,21 +305,15 @@ const CHECKERED_ICON: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBo
 <path fill=\"currentColor\" opacity=\".35\" d=\"M8 2h6v6H8zM2 8h6v6H2z\"/></svg>";
 
 /// One button that switches what the previews are drawn on. Its icon shows the
-/// current background, and the tooltip says what a click switches to.
+/// current background.
 fn preview_background_toggle<'a>(current: PreviewBackground) -> Element<'a, Message> {
-    let (icon, tip) = match current {
-        PreviewBackground::Desktop => (
-            widget::icon::from_name("image-x-generic-symbolic").into(),
-            "Previews are on a desktop background. Click for a checkerboard, to see transparency.",
-        ),
-        PreviewBackground::Checkered => (
-            widget::icon::from_svg_bytes(CHECKERED_ICON).symbolic(true),
-            "Previews are on a checkerboard. Click for a desktop background.",
-        ),
+    let icon = match current {
+        PreviewBackground::Desktop => widget::icon::from_name("image-x-generic-symbolic").into(),
+        PreviewBackground::Checkered => widget::icon::from_svg_bytes(CHECKERED_ICON).symbolic(true),
     };
     widget::tooltip(
         widget::button::icon(icon).on_press(Message::TogglePreviewBackground),
-        tip,
+        "Toggle preview background",
         widget::tooltip::Position::Bottom,
     )
     .into()
@@ -386,12 +377,17 @@ fn theme_card(
     };
     let key = |k: &str| Keystroke::single(k, false);
     let keys = match theme.layout {
-        Layout::Keys => vec![key("V"), Keystroke::combination(&ctrl, "C", false)],
+        Layout::Keys => vec![
+            key("V"),
+            Keystroke::combination(&ctrl, "C", false),
+            key("LClick"),
+        ],
         Layout::Text => vec![
             key("g"),
             key("i"),
             key("t"),
             Keystroke::combination(&ctrl, "S", false),
+            key("LClick"),
         ],
     };
     // Right-aligned so the order reads left to right, like typing
@@ -402,7 +398,8 @@ fn theme_card(
         theme,
         110.0, // a typewriter line short enough to fit the card
         OverlayPosition::TopRight,
-        keys.len(),
+        // The row's length is in key widths; leave room for all of the sample
+        12,
         icon_style,
         crate::keystroke::Motion::default(),
     );

@@ -105,6 +105,17 @@ impl KeyDisplayMode {
 }
 
 impl OverlayPosition {
+    /// The corner an anchor point belongs to: keys grow from it toward the
+    /// middle of the screen, and the repeat badge sits on the inside
+    pub fn from_anchor((x, y): (f32, f32)) -> Self {
+        match (x > 0.5, y > 0.5) {
+            (false, false) => Self::TopLeft,
+            (true, false) => Self::TopRight,
+            (false, true) => Self::BottomLeft,
+            (true, true) => Self::BottomRight,
+        }
+    }
+
     pub const ALL: &'static [OverlayPosition] = &[
         OverlayPosition::TopLeft,
         OverlayPosition::TopCenter,
@@ -166,8 +177,12 @@ pub struct Config {
     pub user_theme: Option<String>,
     /// Position of the overlay on screen
     pub position: OverlayPosition,
-    /// Distance between the keys and the screen edge (pixels)
+    /// Distance between the keys and the screen edge (pixels). Only used to
+    /// place configs from before free placement.
     pub margin: f32,
+    /// Where the newest key sits, as fractions of the screen's width and height,
+    /// set by dragging the keys on screen
+    pub anchor: Option<(f32, f32)>,
     /// Width of the typewriter line, overriding the theme's
     pub line_width: Option<f32>,
     /// Key display mode - typed character or physical key
@@ -190,6 +205,22 @@ pub struct Config {
     pub preview_background: PreviewBackground,
 }
 
+impl Config {
+    /// Where the newest key sits, as fractions of the screen's width and height.
+    /// Configs from before free placement get the spot matching their old position.
+    pub fn anchor(&self) -> (f32, f32) {
+        self.anchor.unwrap_or(match self.position {
+            OverlayPosition::TopLeft => (0.01, 0.02),
+            // Just right of the middle, so the keys still end at the middle
+            OverlayPosition::TopCenter => (0.501, 0.02),
+            OverlayPosition::TopRight => (0.99, 0.02),
+            OverlayPosition::BottomLeft => (0.01, 0.98),
+            OverlayPosition::BottomCenter => (0.501, 0.98),
+            OverlayPosition::BottomRight => (0.99, 0.98),
+        })
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -200,6 +231,7 @@ impl Default for Config {
             user_theme: None,
             position: OverlayPosition::TopRight,
             margin: 20.0,
+            anchor: None,
             line_width: None,
             key_display_mode: KeyDisplayMode::TypedCharacter,
             icon_style: IconStyle::Symbol,
@@ -211,5 +243,39 @@ impl Default for Config {
             show_tablet: true,
             preview_background: PreviewBackground::Desktop,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_positions_become_anchors() {
+        let old = Config {
+            position: OverlayPosition::BottomLeft,
+            anchor: None,
+            ..Config::default()
+        };
+        assert_eq!(old.anchor(), (0.01, 0.98));
+        // Old center positions keep ending at the middle, growing leftward
+        let center = Config {
+            position: OverlayPosition::TopCenter,
+            ..old.clone()
+        };
+        assert_eq!(
+            OverlayPosition::from_anchor(center.anchor()),
+            OverlayPosition::TopRight
+        );
+        // A dragged anchor wins over the old position
+        let dragged = Config {
+            anchor: Some((0.3, 0.7)),
+            ..old
+        };
+        assert_eq!(dragged.anchor(), (0.3, 0.7));
+        assert_eq!(
+            OverlayPosition::from_anchor(dragged.anchor()),
+            OverlayPosition::BottomLeft
+        );
     }
 }

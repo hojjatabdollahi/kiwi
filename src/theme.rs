@@ -75,7 +75,68 @@ fn parse_hex(s: &str) -> Option<Color> {
 #[serde(untagged)]
 pub enum Fill {
     Solid(Hex),
-    Gradient(Hex, Hex),
+    Gradient(Stop, Stop),
+}
+
+impl Fill {
+    /// A gradient from `start` to `end`, spread over its whole length
+    pub fn gradient(start: Hex, end: Hex) -> Self {
+        Self::Gradient(Stop::new(start), Stop::new(end))
+    }
+}
+
+/// One color of a gradient and where it sits along it, from 0 to 1. Before the
+/// start color's spot the gradient is all start color, and past the end color's
+/// spot all end color. Without a spot, a color sits at its end of the gradient.
+///
+/// Written as just the color when it's at its end, or as `("#rrggbbaa", 0.3)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stop {
+    pub color: Hex,
+    pub at: Option<f32>,
+}
+
+impl Stop {
+    pub fn new(color: Hex) -> Self {
+        Self { color, at: None }
+    }
+}
+
+/// Where a gradient's two colors sit, from 0 to 1, in order
+pub fn stop_positions(start: &Stop, end: &Stop) -> (f32, f32) {
+    let start_at = start.at.unwrap_or(0.0).clamp(0.0, 1.0);
+    let end_at = end.at.unwrap_or(1.0).clamp(0.0, 1.0);
+    (start_at.min(end_at), end_at.max(start_at))
+}
+
+/// How a stop is written in a theme file
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum StopRepr {
+    At(Hex, f32),
+    Plain(Hex),
+}
+
+impl Serialize for Stop {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.at {
+            Some(at) => StopRepr::At(self.color, at),
+            None => StopRepr::Plain(self.color),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Stop {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match StopRepr::deserialize(deserializer)? {
+            StopRepr::At(color, at) => Self {
+                color,
+                at: Some(at),
+            },
+            StopRepr::Plain(color) => Self::new(color),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -305,7 +366,7 @@ impl Theme {
             | BuiltinTheme::Ribbon
             | BuiltinTheme::Tape
             | BuiltinTheme::Typewriter => KeyStyle {
-                background: Fill::Gradient(rgba(0.3, 0.35, 0.45, 0.5), rgba(0.2, 0.25, 0.35, 0.4)),
+                background: Fill::gradient(rgba(0.3, 0.35, 0.45, 0.5), rgba(0.2, 0.25, 0.35, 0.4)),
                 pressed: rgba(0.4, 0.5, 0.7, 0.7),
                 border: stroke(rgba(1.0, 1.0, 1.0, 0.2)),
                 radius: 6.0,
@@ -319,7 +380,7 @@ impl Theme {
             },
             // Kiwi green flesh, brown skin border, cream and seed-colored badge
             BuiltinTheme::Kiwi => KeyStyle {
-                background: Fill::Gradient(
+                background: Fill::gradient(
                     rgba(0.55, 0.75, 0.25, 0.55),
                     rgba(0.7, 0.82, 0.45, 0.45),
                 ),
@@ -736,8 +797,19 @@ mod tests {
             ron::from_str(r##"(key: (background: ["#000000", "#ffffff"], gap: 0))"##).unwrap();
         assert_eq!(
             theme.key.background,
-            Fill::Gradient(Hex(Color::BLACK), Hex(Color::WHITE))
+            Fill::gradient(Hex(Color::BLACK), Hex(Color::WHITE))
         );
+        // A color moved along the gradient keeps its spot
+        let moved: Theme =
+            ron::from_str(r##"(key: (background: (("#000000", 0.25), "#ffffff")))"##).unwrap();
+        let Fill::Gradient(start, end) = moved.key.background else {
+            panic!("expected a gradient");
+        };
+        assert_eq!((start.at, end.at), (Some(0.25), None));
+        assert_eq!(stop_positions(&start, &end), (0.25, 1.0));
+        assert!(ron::to_string(&moved.key.background)
+            .unwrap()
+            .contains("0.25"));
         assert_eq!(theme.key.gap, 0.0);
         assert_eq!(theme.key.radius, Theme::default().key.radius);
 

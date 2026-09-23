@@ -109,48 +109,88 @@ pub fn color_picker<'a, M: Clone + 'static>(
         .into()
 }
 
-/// A gradient's two colors as a bar with a handle at each end. The handle for
-/// the color being edited is ringed in the accent color; clicking near an end
-/// selects that color.
-pub fn gradient_bar<'a, M: Clone + 'static>(
-    start: Color,
-    end: Color,
+/// A gradient's two colors on a strip, with a marker under the strip at each
+/// color's spot. Clicking a marker picks that color for editing; dragging it
+/// moves the color along the gradient (both at the same spot give a hard edge).
+pub fn gradient_editor<'a, M: Clone + 'static>(
+    stops: [(f32, Color); 2],
     active: usize,
     on_select: impl Fn(usize) -> M + 'a,
+    on_move: impl Fn(usize, f32) -> M + 'a,
 ) -> Element<'a, M> {
-    widget::Canvas::new(GradientBar {
-        start,
-        end,
+    widget::Canvas::new(GradientEditor {
+        stops,
         active,
         on_select: Box::new(on_select),
+        on_move: Box::new(on_move),
     })
     .width(Length::Fill)
-    .height(Length::Fixed(28.0))
+    .height(Length::Fixed(GRADIENT_EDITOR_HEIGHT))
     .into()
 }
 
-struct GradientBar<'a, M> {
-    start: Color,
-    end: Color,
+const GRADIENT_EDITOR_HEIGHT: f32 = 42.0;
+/// Radius of the markers under the strip
+const MARKER: f32 = 8.0;
+/// The strip runs from the top down to here; markers sit below it
+const STRIP_BOTTOM: f32 = 20.0;
+
+struct GradientEditor<'a, M> {
+    stops: [(f32, Color); 2],
     active: usize,
     on_select: Box<dyn Fn(usize) -> M + 'a>,
+    on_move: Box<dyn Fn(usize, f32) -> M + 'a>,
 }
 
-impl<M: Clone> canvas::Program<M, cosmic::Theme> for GradientBar<'_, M> {
-    type State = ();
+impl<M> GradientEditor<'_, M> {
+    /// The strip spans between the markers' centers at 0 and 1
+    fn x_of(&self, width: f32, at: f32) -> f32 {
+        MARKER + at * (width - 2.0 * MARKER)
+    }
+
+    fn at_of(&self, width: f32, x: f32) -> f32 {
+        ((x - MARKER) / (width - 2.0 * MARKER).max(1.0)).clamp(0.0, 1.0)
+    }
+
+    /// The marker closest to `x`; when both share a spot, the side clicked decides
+    fn nearest(&self, width: f32, x: f32) -> usize {
+        let distance = |i: usize| (self.x_of(width, self.stops[i].0) - x).abs();
+        let (start, end) = (distance(0), distance(1));
+        if (start - end).abs() < 0.5 {
+            usize::from(x > self.x_of(width, self.stops[0].0))
+        } else {
+            usize::from(end < start)
+        }
+    }
+}
+
+impl<M: Clone> canvas::Program<M, cosmic::Theme> for GradientEditor<'_, M> {
+    /// The marker being dragged
+    type State = Option<usize>;
 
     fn update(
         &self,
-        _state: &mut (),
+        dragging: &mut Option<usize>,
         event: &canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<M>> {
+        use mouse::{Button, Event as Mouse};
         match event {
-            cosmic::iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            cosmic::iced::Event::Mouse(Mouse::ButtonPressed(Button::Left)) => {
                 let point = cursor.position_in(bounds)?;
-                let stop = usize::from(point.x > bounds.width / 2.0);
+                let stop = self.nearest(bounds.width, point.x);
+                *dragging = Some(stop);
                 Some(canvas::Action::publish((self.on_select)(stop)).and_capture())
+            }
+            cosmic::iced::Event::Mouse(Mouse::CursorMoved { position }) => {
+                let stop = (*dragging)?;
+                let at = self.at_of(bounds.width, position.x - bounds.x);
+                Some(canvas::Action::publish((self.on_move)(stop, at)).and_capture())
+            }
+            cosmic::iced::Event::Mouse(Mouse::ButtonReleased(Button::Left)) => {
+                dragging.take()?;
+                Some(canvas::Action::capture())
             }
             _ => None,
         }
@@ -158,35 +198,59 @@ impl<M: Clone> canvas::Program<M, cosmic::Theme> for GradientBar<'_, M> {
 
     fn draw(
         &self,
-        _state: &(),
+        _dragging: &Option<usize>,
         renderer: &cosmic::Renderer,
         theme: &cosmic::Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let (w, h) = (bounds.width, bounds.height);
-        let handle = h / 2.0 - 2.0;
+        let w = bounds.width;
+        let [(start_at, start), (end_at, end)] = self.stops;
 
-        // The bar runs between the handles' centers
-        let bar = Rectangle::new(
-            Point::new(handle, h * 0.25),
-            Size::new((w - 2.0 * handle).max(0.0), h * 0.5),
+        // The strip: the gradient as it's drawn, over a checkerboard
+        let strip = Rectangle::new(
+            Point::new(MARKER, 2.0),
+            Size::new((w - 2.0 * MARKER).max(0.0), STRIP_BOTTOM - 2.0),
         );
-        frame.with_clip(bar, |frame| checkerboard(frame, bar.size()));
-        let gradient = Linear::new(Point::new(bar.x, 0.0), Point::new(bar.x + bar.width, 0.0))
-            .add_stop(0.0, self.start)
-            .add_stop(1.0, self.end);
-        frame.fill(&Path::rectangle(bar.position(), bar.size()), gradient);
+        frame.with_clip(strip, |frame| checkerboard(frame, strip.size()));
+        let gradient = Linear::new(
+            Point::new(strip.x, 0.0),
+            Point::new(strip.x + strip.width, 0.0),
+        )
+        .add_stop(start_at, start)
+        .add_stop(end_at, end);
+        let strip_path = Path::rectangle(strip.position(), strip.size());
+        frame.fill(&strip_path, gradient);
+        frame.stroke(
+            &strip_path,
+            Stroke::default()
+                .with_color(Color::from(theme.cosmic().bg_divider()))
+                .with_width(1.0),
+        );
 
+        // A marker under the strip at each color's spot, with a tick up to it.
+        // The active one is drawn last, so it's on top when they overlap.
         let accent = Color::from(theme.cosmic().accent_color());
-        for (stop, color, x) in [(0, self.start, handle), (1, self.end, w - handle)] {
-            let circle = Path::circle(Point::new(x, h / 2.0), handle - 1.0);
-            frame.fill(&circle, Color { a: 1.0, ..color });
+        let order = if self.active == 0 { [1, 0] } else { [0, 1] };
+        for stop in order {
+            let (at, color) = self.stops[stop];
+            let x = self.x_of(w, at);
+            let center = Point::new(x, bounds.height - MARKER - 1.0);
+            frame.stroke(
+                &Path::line(
+                    Point::new(x, STRIP_BOTTOM),
+                    Point::new(x, center.y - MARKER),
+                ),
+                Stroke::default().with_color(Color::WHITE).with_width(2.0),
+            );
+            let circle = Path::circle(center, MARKER - 1.0);
+            checkered_circle(&mut frame, center, MARKER - 1.0);
+            frame.fill(&circle, color);
             ring(&mut frame, &circle);
             if stop == self.active {
                 frame.stroke(
-                    &Path::circle(Point::new(x, h / 2.0), handle + 0.5),
+                    &Path::circle(center, MARKER + 1.5),
                     Stroke::default().with_color(accent).with_width(2.5),
                 );
             }
@@ -196,12 +260,14 @@ impl<M: Clone> canvas::Program<M, cosmic::Theme> for GradientBar<'_, M> {
 
     fn mouse_interaction(
         &self,
-        _state: &(),
+        dragging: &Option<usize>,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if cursor.is_over(bounds) {
-            mouse::Interaction::Pointer
+        if dragging.is_some() {
+            mouse::Interaction::Grabbing
+        } else if cursor.is_over(bounds) {
+            mouse::Interaction::Grab
         } else {
             mouse::Interaction::default()
         }
@@ -372,6 +438,36 @@ fn ring(frame: &mut Frame, path: &Path) {
         path,
         Stroke::default().with_color(Color::WHITE).with_width(2.0),
     );
+}
+
+/// A checkered circle, to put a color on so its transparency shows. The squares
+/// stop at the circle roughly, so draw an outline over the edge.
+fn checkered_circle(frame: &mut Frame, center: Point, radius: f32) {
+    frame.fill(
+        &Path::circle(center, radius),
+        Color::from_rgb8(204, 204, 204),
+    );
+    let square = 4.0;
+    let span = (radius / square).ceil() as i32;
+    for row in -span..span {
+        for column in -span..span {
+            if (row + column).rem_euclid(2) == 0 {
+                continue;
+            }
+            let corner = Point::new(
+                center.x + column as f32 * square,
+                center.y + row as f32 * square,
+            );
+            let middle = Point::new(corner.x + square / 2.0, corner.y + square / 2.0);
+            if middle.distance(center) < radius {
+                frame.fill_rectangle(
+                    corner,
+                    Size::new(square, square),
+                    Color::from_rgb8(153, 153, 153),
+                );
+            }
+        }
+    }
 }
 
 pub(crate) fn checkerboard(frame: &mut Frame, size: Size) {
