@@ -599,7 +599,7 @@ fn cap_for<'t>(theme: &'t Theme, key: &str) -> Option<&'t theme::Cap> {
     if theme.caps.is_empty() {
         return None;
     }
-    theme.cap(key).or(theme.blank_cap())
+    theme.cap(key).or(theme.blank_cap(key))
 }
 
 /// Width of one key: a cap is as wide as its shape, anything else is square
@@ -620,7 +620,7 @@ fn keycap<'a, M: 'a>(
     theme: &Theme,
 ) -> Element<'a, M> {
     let own = theme.cap(key);
-    let Some(cap) = own.or(theme.blank_cap()) else {
+    let Some(cap) = own.or(theme.blank_cap(key)) else {
         let fill = if pressed {
             Fill::Solid(theme.key.pressed)
         } else {
@@ -1565,8 +1565,10 @@ mod tests {
         let letter = parts_width(&keys(&["a"]), 50.0, &mechanical);
         let shift = parts_width(&keys(&["⇧"]), 50.0, &mechanical);
         assert!(shift > 2.0 * letter, "{shift} vs {letter}");
-        // A mouse button has no cap of its own, so it's on the blank cap
-        assert_eq!(parts_width(&keys(&["LClick"]), 50.0, &mechanical), letter);
+        // A mouse button has no cap of its own, so it's on the mouse blank
+        let mouse = mechanical.caps["_mouse"].aspect * cap_height(50.0);
+        assert_eq!(parts_width(&keys(&["LClick"]), 50.0, &mechanical), mouse);
+        assert!(mouse < letter);
         assert_eq!(
             parts_width(&keys(&["⇧", "a"]), 50.0, &mechanical),
             shift + letter + PLUS_WIDTH

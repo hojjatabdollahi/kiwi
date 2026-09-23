@@ -23,3 +23,7 @@ full text in `LICENSE-misonocons.txt`. Misonocons by MisonoWorks is licensed und
 
 Changes: single icons were cut out of the icon sheet and resized. On the caps they're
 recolored to `#2b2b2b`.
+
+## Device blanks: `icons/caps/_mouse.svg`, `_touchpad.svg`, `_pen.svg`
+
+Drawn for Kiwi, in the colors and lighting of the keycaps above. Same license as Kiwi.

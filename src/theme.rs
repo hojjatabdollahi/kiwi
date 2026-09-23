@@ -13,7 +13,9 @@
 //!
 //! An icon is drawn inside the key's box. A cap *is* the key: it's drawn instead
 //! of the box, at the key's height and as wide as the SVG's shape, and never tinted.
-//! Keys without their own cap use `_blank.svg` with their usual label on top.
+//! Keys without their own cap use a blank cap with their usual label on top:
+//! `_mouse.svg`, `_touchpad.svg` or `_pen.svg` for input from those devices
+//! (tablet pad buttons count as pen), and `_blank.svg` for everything else.
 
 use std::collections::HashMap;
 use std::fs;
@@ -373,9 +375,11 @@ type Svgs = &'static [(&'static str, &'static [u8])];
 const MECHANICAL_ICONS: Svgs = svgs!("mechanical/icons":
     "Esc" "Home" "End" "PgUp" "PgDn" "Ins" "Del" "ScrLk" "PrtSc" "Pause" "Compose" "Numlock");
 const MECHANICAL_CAPS: Svgs = svgs!("mechanical/icons/caps":
-    "_blank" "Space" "Shift" "Caps" "Tab" "Backspace" "Enter" "Ctrl" "Alt" "Super");
+    "_blank" "_mouse" "_touchpad" "_pen"
+    "Space" "Shift" "Caps" "Tab" "Backspace" "Enter" "Ctrl" "Alt" "Super");
 const MAC_CAPS: Svgs = svgs!("mac/icons/caps":
-    "_blank" "Space" "Shift" "Caps" "Tab" "Backspace" "Enter" "Ctrl" "Alt" "Super" "Esc"
+    "_blank" "_mouse" "_touchpad" "_pen"
+    "Space" "Shift" "Caps" "Tab" "Backspace" "Enter" "Ctrl" "Alt" "Super" "Esc"
     "Left" "Right" "Up" "Down"
     "A" "B" "C" "D" "E" "F" "G" "H" "I" "J" "K" "L" "M"
     "N" "O" "P" "Q" "R" "S" "T" "U" "V" "W" "X" "Y" "Z"
@@ -696,9 +700,31 @@ impl Theme {
             .or_else(|| self.cap(crate::keystroke::dragged_button(key)?))
     }
 
-    /// The cap for keys that don't have their own, with their label drawn on top
-    pub fn blank_cap(&self) -> Option<&Cap> {
-        self.caps.get(BLANK_CAP)
+    /// The cap `key` uses when it has none of its own, with its label drawn on
+    /// top: the blank for its device if the theme has one, or else `_blank`
+    pub fn blank_cap(&self, key: &str) -> Option<&Cap> {
+        device_blank(key)
+            .and_then(|name| self.caps.get(name))
+            .or_else(|| self.caps.get(BLANK_CAP))
+    }
+}
+
+/// The blank cap for input from a pointing device, by its label
+fn device_blank(key: &str) -> Option<&'static str> {
+    // Swipes and multi-finger taps: "2Up", "3Tap", "4Down", ...
+    let fingers = key
+        .strip_prefix(['2', '3', '4'])
+        .is_some_and(|rest| matches!(rest, "Tap" | "Up" | "Down" | "Left" | "Right"));
+    let pad_button = key
+        .strip_prefix("Pad")
+        .is_some_and(|n| n.parse::<u8>().is_ok());
+    match key {
+        "LClick" | "RClick" | "MClick" | "LDrag" | "ScrollUp" | "ScrollDown" => Some("_mouse"),
+        "Tap" | "TapDrag" => Some("_touchpad"),
+        _ if fingers => Some("_touchpad"),
+        "PenTap" | "PenDrag" | "Pen1" | "Pen2" | "Pen3" | "Eraser" | "EraserDrag" => Some("_pen"),
+        _ if pad_button => Some("_pen"),
+        _ => None,
     }
 }
 
@@ -1317,7 +1343,7 @@ mod tests {
         // Typed lowercase letters use the letter's cap; symbols use their file name
         assert_eq!(mac.cap("a"), mac.cap("A"));
         assert!(mac.cap("a").is_some() && mac.cap("/").is_some());
-        assert!(mac.cap("LClick").is_none() && mac.blank_cap().is_some());
+        assert!(mac.cap("LClick").is_none());
 
         // A drag without its own cap uses the button's
         let mut theme = Theme::default();
@@ -1329,10 +1355,31 @@ mod tests {
         theme.caps.insert("LDrag".into(), Cap::new(SVG.as_bytes()));
         assert_eq!(theme.cap("LDrag").unwrap().aspect, 1.0);
 
-        // Every built-in keycap theme has a blank cap for the keys without one
+        // Keys without a cap use their device's blank, or the plain one
         for builtin in [BuiltinTheme::Mechanical, BuiltinTheme::Mac] {
-            assert!(Theme::builtin(builtin).blank_cap().is_some(), "{builtin:?}");
+            let theme = Theme::builtin(builtin);
+            let blank = |key| theme.blank_cap(key).map(|cap| cap.svg.id());
+            let named = |name| theme.caps.get(name).map(|cap| cap.svg.id());
+            assert!(named("_blank").is_some(), "{builtin:?}");
+            for (key, name) in [
+                ("A", "_blank"),
+                ("F5", "_blank"),
+                ("LClick", "_mouse"),
+                ("ScrollDown", "_mouse"),
+                ("Tap", "_touchpad"),
+                ("3Up", "_touchpad"),
+                ("2Right", "_touchpad"),
+                ("PenDrag", "_pen"),
+                ("Pad8", "_pen"),
+            ] {
+                assert_eq!(blank(key), named(name), "{builtin:?} {key}");
+            }
         }
+        // A theme without device blanks puts everything on `_blank`
+        let mut theme = Theme::default();
+        theme.caps.insert("_blank".into(), Cap::new(SVG.as_bytes()));
+        assert_eq!(theme.blank_cap("LClick"), theme.blank_cap("A"));
+        assert!(theme.blank_cap("A").is_some());
     }
 
     #[test]
