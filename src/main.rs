@@ -6,7 +6,6 @@ mod cosmic_xkb;
 mod input;
 mod keystroke;
 mod overlay;
-mod position_selector;
 mod settings;
 mod theme;
 mod tray;
@@ -92,7 +91,20 @@ struct KiwiApp {
     themes: Vec<(ThemeChoice, Arc<Theme>)>,
     /// Result of the last theme import/export, shown under the theme cards
     theme_message: Option<String>,
+    /// Set while the overlay is being arranged on screen
+    arranging: Option<Arranging>,
 }
+
+/// An arrange-on-screen session
+struct Arranging {
+    /// Config from before arranging, restored by Cancel
+    before: Config,
+    /// Last time the user did something; arranging ends after a minute without input
+    last_input: std::time::Instant,
+}
+
+/// How long arrange mode waits for input before finishing by itself
+const ARRANGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -108,7 +120,6 @@ pub enum Message {
     TrayQuit,
     // Settings
     ToggleActive(bool),
-    SetKeySize(f32),
     SetFadeDuration(f32),
     SelectTheme(ThemeChoice),
     OpenThemesFolder,
@@ -120,7 +131,14 @@ pub enum Message {
     SetPosition(OverlayPosition),
     SetKeyDisplayMode(config::KeyDisplayMode),
     SetIconStyle(config::IconStyle),
-    SetHistoryCount(u8),
+    // Arrange mode
+    StartArranging,
+    FinishArranging,
+    CancelArranging,
+    ResetArrangement,
+    NudgeSize(f32),
+    NudgeMargin(f32),
+    NudgeLength(i32),
     SetShowKeyboard(bool),
     SetShowMouse(bool),
     SetShowGestures(bool),
@@ -171,25 +189,10 @@ impl cosmic::Application for KiwiApp {
             .map(|h| Config::get_entry(h).unwrap_or_else(|(_, config)| config))
             .unwrap_or_default();
 
-        let theme_choice = ThemeChoice::from_config(&config);
-        let theme = Arc::new(theme_choice.load(&theme::themes_dir()));
-
-        // Create shared state for overlay
-        let shared_state = Arc::new(Mutex::new(SharedState::new(
-            config.enabled,
-            config.key_size,
-            config.fade_duration,
-            theme_choice,
-            theme,
-            config.position,
-            config.key_display_mode,
-            config.icon_style,
-            config.history_count,
-            config.show_keyboard,
-            config.show_mouse,
-            config.show_gestures,
-            config.show_touch,
-        )));
+        // Create shared state for overlay (this also loads the theme)
+        let mut state = SharedState::default();
+        state.update_from_config(&config);
+        let shared_state = Arc::new(Mutex::new(state));
 
         let initial_xkb_config = cosmic_xkb::load_current_config();
         let (xkb_config_tx, xkb_config_rx) =
@@ -230,6 +233,7 @@ impl cosmic::Application for KiwiApp {
             about,
             themes: Vec::new(),
             theme_message: None,
+            arranging: None,
         };
 
         // Load bundled font
@@ -302,15 +306,14 @@ impl cosmic::Application for KiwiApp {
     fn view(&self) -> Element<'_, Self::Message> {
         // This is for the settings window (main window when open)
         settings::settings_view(
-            self.config.key_size,
             self.config.fade_duration,
             &self.themes,
             &ThemeChoice::from_config(&self.config),
             self.theme_message.as_deref(),
             self.config.position,
+            self.config.margin,
             self.config.key_display_mode,
             self.config.icon_style,
-            self.config.history_count,
             self.config.enabled,
             self.config.show_keyboard,
             self.config.show_mouse,
@@ -326,15 +329,14 @@ impl cosmic::Application for KiwiApp {
         } else {
             // Settings window
             settings::settings_view(
-                self.config.key_size,
                 self.config.fade_duration,
                 &self.themes,
                 &ThemeChoice::from_config(&self.config),
                 self.theme_message.as_deref(),
                 self.config.position,
+                self.config.margin,
                 self.config.key_display_mode,
                 self.config.icon_style,
-                self.config.history_count,
                 self.config.enabled,
                 self.config.show_keyboard,
                 self.config.show_mouse,
@@ -395,6 +397,20 @@ impl cosmic::Application for KiwiApp {
             .unwrap_or(false)
         {
             subs.push(time::every(Duration::from_millis(16)).map(|_| Message::Tick));
+        }
+
+        // Esc cancels arranging (the overlay has keyboard focus meanwhile)
+        if self.arranging.is_some() {
+            subs.push(listen_with(|event, _, _| {
+                use cosmic::iced::keyboard::{key::Named, Event, Key};
+                match event {
+                    cosmic::iced::core::Event::Keyboard(Event::KeyPressed {
+                        key: Key::Named(Named::Escape),
+                        ..
+                    }) => Some(Message::CancelArranging),
+                    _ => None,
+                }
+            }));
         }
 
         // Debounce timer for config save
@@ -472,16 +488,6 @@ impl cosmic::Application for KiwiApp {
                     log::info!("Keystrokes disabled");
                 }
             }
-            Message::SetKeySize(size) => {
-                self.config.key_size = size;
-                self.pending_save = true;
-
-                // Update shared state - content resizes automatically within fixed-height window
-                if let Ok(mut state) = self.shared_state.lock() {
-                    state.key_size = size;
-                }
-                // No need to resize surfaces - height is fixed, width grows from anchor
-            }
             Message::SetFadeDuration(duration) => {
                 self.config.fade_duration = duration;
                 self.pending_save = true;
@@ -555,19 +561,65 @@ impl cosmic::Application for KiwiApp {
             }
             Message::ThemeMessage(message) => self.theme_message = Some(message),
             Message::SetPosition(position) => {
-                let old_position = self.config.position;
                 self.config.position = position;
-                self.save_config();
-
-                // Update shared state
-                if let Ok(mut state) = self.shared_state.lock() {
-                    state.position = position;
+                self.apply_arrangement();
+            }
+            Message::StartArranging => {
+                if self.arranging.is_none() {
+                    self.arranging = Some(Arranging {
+                        before: self.config.clone(),
+                        last_input: std::time::Instant::now(),
+                    });
+                    if let Ok(mut state) = self.shared_state.lock() {
+                        state.arranging = true;
+                    }
+                    return self.set_overlays_interactive(true);
                 }
-
-                // Recreate layer surfaces if position changed
-                if old_position != position {
-                    return self.recreate_layer_surfaces();
+            }
+            Message::FinishArranging => return self.stop_arranging(true),
+            Message::CancelArranging => return self.stop_arranging(false),
+            Message::ResetArrangement => {
+                let (default_size, layout) = self
+                    .shared_state
+                    .lock()
+                    .map(|s| (s.theme.default_size, s.theme.layout))
+                    .unwrap_or((64.0, theme::Layout::Keys));
+                let defaults = Config::default();
+                self.config.key_size = default_size;
+                self.config.position = defaults.position;
+                self.config.margin = defaults.margin;
+                self.config.line_width = None;
+                if layout == theme::Layout::Keys {
+                    self.config.history_count = defaults.history_count;
                 }
+                self.apply_arrangement();
+            }
+            Message::NudgeSize(delta) => {
+                self.config.key_size = (self.config.key_size + delta).clamp(32.0, 160.0);
+                self.apply_arrangement();
+            }
+            Message::NudgeMargin(delta) => {
+                self.config.margin = (self.config.margin + delta).clamp(0.0, 400.0);
+                self.apply_arrangement();
+            }
+            Message::NudgeLength(steps) => {
+                let Ok(theme) = self.shared_state.lock().map(|s| s.theme.clone()) else {
+                    return Task::none();
+                };
+                match theme.layout {
+                    // Keys: how many keystrokes stay on screen
+                    theme::Layout::Keys => {
+                        self.config.history_count =
+                            (self.config.history_count as i32 + steps).clamp(1, 10) as u8;
+                    }
+                    // Text: how wide the line is
+                    theme::Layout::Text => {
+                        let width = self.config.line_width.unwrap_or(theme.line_width);
+                        self.config.line_width =
+                            Some((width + steps as f32 * 40.0).clamp(160.0, 1600.0));
+                    }
+                }
+                self.apply_arrangement();
             }
             Message::SetKeyDisplayMode(mode) => {
                 self.config.key_display_mode = mode;
@@ -585,15 +637,6 @@ impl cosmic::Application for KiwiApp {
                 // Update shared state
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.icon_style = style;
-                }
-            }
-            Message::SetHistoryCount(count) => {
-                self.config.history_count = count;
-                self.save_config();
-
-                // Update shared state
-                if let Ok(mut state) = self.shared_state.lock() {
-                    state.history_count = count;
                 }
             }
             Message::SetShowKeyboard(show) => {
@@ -635,7 +678,6 @@ impl cosmic::Application for KiwiApp {
                 if self.pending_save {
                     self.pending_save = false;
                     self.save_config();
-                    // Resize is now done immediately in SetKeySize, not here
                 }
             }
             Message::ConfigChanged(config) => {
@@ -672,10 +714,20 @@ impl cosmic::Application for KiwiApp {
                 if let Ok(mut state) = self.shared_state.lock() {
                     state.cleanup_expired();
                 }
+                // Never leave the overlay holding input if arranging was abandoned
+                if self
+                    .arranging
+                    .as_ref()
+                    .is_some_and(|a| a.last_input.elapsed() > ARRANGE_TIMEOUT)
+                {
+                    log::info!("No input while arranging, finishing");
+                    return self.stop_arranging(true);
+                }
             }
             Message::TrayAction(action) => match action {
                 tray::TrayAction::ShowSettings => return self.update(Message::TrayShowSettings),
                 tray::TrayAction::ToggleActive => return self.update(Message::TrayToggleActive),
+                tray::TrayAction::Arrange => return self.update(Message::StartArranging),
                 tray::TrayAction::Quit => return self.update(Message::TrayQuit),
             },
             Message::ToggleContextPage(context_page) => {
@@ -851,21 +903,44 @@ impl KiwiApp {
         Task::none()
     }
 
-    fn recreate_layer_surfaces(&mut self) -> Task<cosmic::Action<Message>> {
-        let mut tasks = Vec::new();
-
-        // Destroy old surfaces and create new full-screen ones
-        for output_state in &mut self.outputs {
-            // Destroy old surface
-            tasks.push(destroy_surface(output_state.surface_id));
-
-            // Create new full-screen surface
-            let new_id = window::Id::unique();
-            output_state.surface_id = new_id;
-            let task = create_layer_surface_for_output(&output_state.output, new_id);
-            tasks.push(task);
+    /// Show the arranged config on the overlay. It's saved when arranging finishes.
+    fn apply_arrangement(&mut self) {
+        if let Some(arranging) = &mut self.arranging {
+            arranging.last_input = std::time::Instant::now();
+        } else {
+            self.save_config();
         }
+        if let Ok(mut state) = self.shared_state.lock() {
+            state.update_from_config(&self.config);
+        }
+    }
 
-        cosmic::iced::Task::batch(tasks)
+    /// Leave arrange mode, keeping the new arrangement or going back to the old one
+    fn stop_arranging(&mut self, keep: bool) -> Task<cosmic::Action<Message>> {
+        let Some(arranging) = self.arranging.take() else {
+            return Task::none();
+        };
+        if !keep {
+            let before = arranging.before;
+            self.config.position = before.position;
+            self.config.margin = before.margin;
+            self.config.key_size = before.key_size;
+            self.config.line_width = before.line_width;
+            self.config.history_count = before.history_count;
+        }
+        self.save_config();
+        if let Ok(mut state) = self.shared_state.lock() {
+            state.arranging = false;
+            state.update_from_config(&self.config);
+        }
+        self.set_overlays_interactive(false)
+    }
+
+    fn set_overlays_interactive(&self, interactive: bool) -> Task<cosmic::Action<Message>> {
+        Task::batch(
+            self.outputs
+                .iter()
+                .map(|o| overlay::set_interactive(o.surface_id, interactive)),
+        )
     }
 }

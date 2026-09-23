@@ -13,11 +13,11 @@ use wayland_client::protocol::wl_output::WlOutput;
 
 use crate::config::{IconStyle, OverlayPosition};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke};
-use crate::theme::{Theme, ThemeChoice};
+use crate::theme::{Layout, Theme, ThemeChoice};
 use crate::{KiwiApp, Message};
 
-/// Maximum number of keystrokes in history
-pub const MAX_HISTORY: usize = 10;
+/// Maximum number of keystrokes in history (the typewriter line needs more than a few)
+pub const MAX_HISTORY: usize = 64;
 
 /// How long a lifted touch point keeps fading out (seconds)
 const TOUCH_FADE_DURATION: f32 = 0.25;
@@ -63,6 +63,12 @@ pub struct SharedState {
     pub theme: Arc<Theme>,
     /// Overlay position
     pub position: OverlayPosition,
+    /// Distance between the keys and the screen edge
+    pub margin: f32,
+    /// Typewriter line width, overriding the theme's
+    pub line_width: Option<f32>,
+    /// Arrange mode: the overlay takes input and shows sample keys, snap spots and a toolbar
+    pub arranging: bool,
     /// Key display mode (typed character vs physical key)
     pub key_display_mode: crate::config::KeyDisplayMode,
     /// Icon style (symbols vs text)
@@ -95,45 +101,6 @@ pub struct SharedState {
 }
 
 impl SharedState {
-    pub fn new(
-        enabled: bool,
-        key_size: f32,
-        fade_duration: f32,
-        theme_choice: ThemeChoice,
-        theme: Arc<Theme>,
-        position: OverlayPosition,
-        key_display_mode: crate::config::KeyDisplayMode,
-        icon_style: IconStyle,
-        history_count: u8,
-        show_keyboard: bool,
-        show_mouse: bool,
-        show_gestures: bool,
-        show_touch: bool,
-    ) -> Self {
-        Self {
-            enabled,
-            key_size,
-            fade_duration,
-            theme_choice,
-            theme,
-            position,
-            key_display_mode,
-            icon_style,
-            history_count,
-            show_keyboard,
-            show_mouse,
-            show_gestures,
-            show_touch,
-            touches: Vec::new(),
-            modifiers: KeyModifiers::default(),
-            peak_modifiers: KeyModifiers::default(),
-            current_key: None,
-            history: Vec::new(),
-            key_pressed_with_modifiers: false,
-            current_mouse: None,
-        }
-    }
-
     /// Update state from config
     pub fn update_from_config(&mut self, config: &crate::config::Config) {
         self.enabled = config.enabled;
@@ -145,6 +112,8 @@ impl SharedState {
             self.theme_choice = theme_choice;
         }
         self.position = config.position;
+        self.margin = config.margin;
+        self.line_width = config.line_width;
         self.key_display_mode = config.key_display_mode;
         self.icon_style = config.icon_style;
         self.history_count = config.history_count;
@@ -210,6 +179,9 @@ impl Default for SharedState {
             theme_choice: ThemeChoice::Builtin(crate::config::BuiltinTheme::Frosted),
             theme: Arc::new(Theme::default()),
             position: OverlayPosition::TopRight,
+            margin: 20.0,
+            line_width: None,
+            arranging: false,
             key_display_mode: crate::config::KeyDisplayMode::default(),
             icon_style: IconStyle::default(),
             history_count: 5,
@@ -371,6 +343,109 @@ fn with_opacity(color: cosmic::iced::Color, opacity: f32) -> cosmic::iced::Color
     }
 }
 
+/// What one frame of the overlay needs, copied out of the shared state
+struct Snapshot {
+    keystrokes: Vec<Keystroke>,
+    key_size: f32,
+    fade_duration: f32,
+    theme: Arc<Theme>,
+    position: OverlayPosition,
+    margin: f32,
+    line_width: Option<f32>,
+    history_count: u8,
+    icon_style: IconStyle,
+    touches: Vec<TouchPoint>,
+    arranging: bool,
+}
+
+impl Snapshot {
+    fn take(s: &SharedState, show_touches: bool) -> Self {
+        let keystrokes = if s.arranging {
+            sample_keystrokes(s.theme.layout)
+        } else if s.enabled {
+            live_keystrokes(s)
+        } else {
+            Vec::new()
+        };
+        let touches = if s.enabled && s.show_touch && show_touches {
+            s.touches.clone()
+        } else {
+            Vec::new()
+        };
+        Self {
+            keystrokes,
+            key_size: s.key_size,
+            fade_duration: s.fade_duration,
+            theme: s.theme.clone(),
+            position: s.position,
+            margin: s.margin,
+            line_width: s.line_width,
+            history_count: s.history_count,
+            icon_style: s.icon_style,
+            touches,
+            arranging: s.arranging,
+        }
+    }
+}
+
+/// The history plus whatever is held down right now
+fn live_keystrokes(s: &SharedState) -> Vec<Keystroke> {
+    let mut display: Vec<Keystroke> = s.history.clone();
+
+    // Build current "pressed" keystroke from state
+    // Priority: mouse action > key > modifiers-only
+    if let Some((ref btn_str, _, has_moved)) = s.current_mouse {
+        // Mouse button is pressed - show it (with modifiers if any)
+        let display_str = if has_moved {
+            crate::keystroke::drag_variant(btn_str).unwrap_or(btn_str)
+        } else {
+            btn_str.as_str()
+        };
+
+        let mouse_keystroke = if s.modifiers.any() {
+            Keystroke::combination(&s.modifiers, display_str, true)
+        } else {
+            Keystroke::single(display_str, true)
+        };
+        display.push(mouse_keystroke);
+    } else if let Some((ref key, ref key_mods)) = s.current_key {
+        // Key + modifiers pressed (use modifiers from when key was pressed)
+        let current = if key_mods.any() {
+            Keystroke::combination(key_mods, key.clone(), true)
+        } else {
+            Keystroke::single(key.clone(), true)
+        };
+        display.push(current);
+    } else if s.modifiers.any() {
+        // Only modifiers pressed (no key, no mouse)
+        if let Some(mods_keystroke) = Keystroke::from_modifiers(&s.modifiers, true) {
+            display.push(mods_keystroke);
+        }
+    }
+    display
+}
+
+/// What arrange mode shows in place of real input
+fn sample_keystrokes(layout: Layout) -> Vec<Keystroke> {
+    let ctrl = KeyModifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    let key = |k: &str| Keystroke::single(k, false);
+    match layout {
+        Layout::Keys => vec![
+            key("V"),
+            Keystroke::combination(&ctrl, "C", false),
+            key("A"),
+        ],
+        Layout::Text => "git push"
+            .chars()
+            .map(|c| key(&c.to_string()))
+            .chain([Keystroke::combination(&ctrl, "S", false)])
+            .collect(),
+    }
+}
+
 /// Render the overlay view (full-screen, with layout positioning).
 ///
 /// `show_touches` is only set for the surface on the output touch input is
@@ -379,166 +454,356 @@ pub fn view_overlay(
     state: &Arc<Mutex<SharedState>>,
     show_touches: bool,
 ) -> cosmic::Element<'static, Message> {
-    let (keystrokes, key_size, fade_duration, theme, position, history_count, icon_style, touches) =
-        state
-            .lock()
-            .map(|s| {
-                if !s.enabled {
-                    return (
-                        Vec::new(),
-                        s.key_size,
-                        s.fade_duration,
-                        s.theme.clone(),
-                        s.position,
-                        s.history_count,
-                        s.icon_style,
-                        Vec::new(),
-                    );
-                }
+    use cosmic::iced::alignment::{Horizontal, Vertical};
 
-                let mut display: Vec<Keystroke> = s.history.clone();
-
-                // Build current "pressed" keystroke from state
-                // Priority: mouse action > key > modifiers-only
-                if let Some((ref btn_str, _, has_moved)) = s.current_mouse {
-                    // Mouse button is pressed - show it (with modifiers if any)
-                    let display_str = if has_moved {
-                        crate::keystroke::drag_variant(btn_str).unwrap_or(btn_str)
-                    } else {
-                        btn_str.as_str()
-                    };
-
-                    let mouse_keystroke = if s.modifiers.any() {
-                        Keystroke::combination(&s.modifiers, display_str, true)
-                    } else {
-                        Keystroke::single(display_str, true)
-                    };
-                    display.push(mouse_keystroke);
-                } else if let Some((ref key, ref key_mods)) = s.current_key {
-                    // Key + modifiers pressed (use modifiers from when key was pressed)
-                    let current = if key_mods.any() {
-                        Keystroke::combination(key_mods, key.clone(), true)
-                    } else {
-                        Keystroke::single(key.clone(), true)
-                    };
-                    display.push(current);
-                } else if s.modifiers.any() {
-                    // Only modifiers pressed (no key, no mouse)
-                    if let Some(mods_keystroke) = Keystroke::from_modifiers(&s.modifiers, true) {
-                        display.push(mods_keystroke);
-                    }
-                }
-
-                let touches = if s.show_touch && show_touches {
-                    s.touches.clone()
-                } else {
-                    Vec::new()
-                };
-
-                (
-                    display,
-                    s.key_size,
-                    s.fade_duration,
-                    s.theme.clone(),
-                    s.position,
-                    s.history_count,
-                    s.icon_style,
-                    touches,
-                )
-            })
-            .unwrap_or((
-                Vec::new(),
-                36.0,
-                5.0,
-                Arc::new(Theme::default()),
-                OverlayPosition::default(),
-                5,
-                IconStyle::default(),
-                Vec::new(),
-            ));
-
-    // Determine vertical and horizontal alignment based on position
-    let (v_align, h_align) = match position {
-        OverlayPosition::TopLeft => (
-            cosmic::iced::alignment::Vertical::Top,
-            cosmic::iced::alignment::Horizontal::Left,
-        ),
-        OverlayPosition::TopRight => (
-            cosmic::iced::alignment::Vertical::Top,
-            cosmic::iced::alignment::Horizontal::Right,
-        ),
-        OverlayPosition::BottomLeft => (
-            cosmic::iced::alignment::Vertical::Bottom,
-            cosmic::iced::alignment::Horizontal::Left,
-        ),
-        OverlayPosition::BottomRight => (
-            cosmic::iced::alignment::Vertical::Bottom,
-            cosmic::iced::alignment::Horizontal::Right,
-        ),
-        OverlayPosition::BottomCenter => (
-            cosmic::iced::alignment::Vertical::Bottom,
-            // Right edge at center - we'll handle this specially
-            cosmic::iced::alignment::Horizontal::Center,
-        ),
+    let Ok(frame) = state.lock().map(|s| Snapshot::take(&s, show_touches)) else {
+        return cosmic::widget::Space::new().into();
     };
 
-    let content: cosmic::Element<'static, Message> = if keystrokes.is_empty() {
-        // Empty widget when no keystrokes
+    let (v_align, h_align) = match frame.position {
+        OverlayPosition::TopLeft => (Vertical::Top, Horizontal::Left),
+        OverlayPosition::TopCenter => (Vertical::Top, Horizontal::Center),
+        OverlayPosition::TopRight => (Vertical::Top, Horizontal::Right),
+        OverlayPosition::BottomLeft => (Vertical::Bottom, Horizontal::Left),
+        OverlayPosition::BottomCenter => (Vertical::Bottom, Horizontal::Center),
+        OverlayPosition::BottomRight => (Vertical::Bottom, Horizontal::Right),
+    };
+
+    let content: cosmic::Element<'static, Message> = if frame.keystrokes.is_empty() {
         cosmic::widget::Space::new().into()
     } else {
-        // Show keystrokes row
         keystrokes_row(
-            &keystrokes,
-            key_size,
-            fade_duration,
-            &theme,
-            position,
-            history_count as usize,
-            icon_style,
+            &frame.keystrokes,
+            frame.key_size,
+            frame.fade_duration,
+            &frame.theme,
+            frame.line_width.unwrap_or(frame.theme.line_width),
+            frame.position,
+            frame.history_count as usize,
+            frame.icon_style,
         )
     };
 
-    // For BottomCenter: newest key at center, older keys grow to the left
-    // Use a row with two halves: [left half with content aligned right] [right half empty spacer]
-    // This puts the rightmost key at screen center
-    let positioned_content: cosmic::Element<'static, Message> =
-        if position == OverlayPosition::BottomCenter {
-            cosmic::widget::Row::new()
-                // Left half: content aligned to the right edge (screen center)
-                .push(
-                    cosmic::widget::container(content)
-                        .width(cosmic::iced::Length::FillPortion(1))
-                        .align_x(cosmic::iced::alignment::Horizontal::Right),
-                )
-                // Right half: empty spacer (takes up right 50% of screen)
-                .push(cosmic::widget::Space::new().width(cosmic::iced::Length::FillPortion(1)))
-                .into()
-        } else {
-            content
-        };
-
     // Full-screen container with proper alignment
-    let keystroke_layer: cosmic::Element<'static, Message> =
-        cosmic::widget::container(positioned_content)
+    let keystroke_layer: cosmic::Element<'static, Message> = cosmic::widget::container(content)
+        .width(cosmic::iced::Length::Fill)
+        .height(cosmic::iced::Length::Fill)
+        .align_x(h_align)
+        .align_y(v_align)
+        .padding(frame.margin)
+        .into();
+
+    if frame.arranging {
+        let spots = cosmic::widget::Canvas::new(ArrangeCanvas {
+            position: frame.position,
+            margin: frame.margin,
+            key_size: frame.key_size,
+        })
+        .width(cosmic::iced::Length::Fill)
+        .height(cosmic::iced::Length::Fill);
+        let toolbar = cosmic::widget::container(arrange_toolbar(&frame))
             .width(cosmic::iced::Length::Fill)
             .height(cosmic::iced::Length::Fill)
-            .align_x(h_align)
-            .align_y(v_align)
-            .padding(20) // Margin from edges
-            .into();
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center);
+        return cosmic::iced::widget::stack![spots, keystroke_layer, toolbar].into();
+    }
 
-    if touches.is_empty() {
+    if frame.touches.is_empty() {
         return keystroke_layer;
     }
 
     // Touch markers go behind the keystroke row, covering the whole surface
     let touch_layer = cosmic::widget::Canvas::new(TouchCanvas {
-        touches,
-        style: theme.key,
-        key_size,
+        touches: frame.touches,
+        style: frame.theme.key,
+        key_size: frame.key_size,
     })
     .width(cosmic::iced::Length::Fill)
     .height(cosmic::iced::Length::Fill);
 
     cosmic::iced::widget::stack![touch_layer, keystroke_layer].into()
+}
+
+/// Let a surface take pointer and keyboard input (for arrange mode), or make it click-through again
+pub fn set_interactive(
+    surface_id: window::Id,
+    interactive: bool,
+) -> cosmic::iced::Task<cosmic::Action<Message>> {
+    use cosmic::iced::platform_specific::runtime::{self as platform, wayland};
+    use cosmic::iced::platform_specific::shell::commands::layer_surface::set_keyboard_interactivity;
+    use cosmic::iced::runtime::{task, Action};
+
+    let (zone, keyboard) = if interactive {
+        // No input zone = the whole surface takes input; keyboard focus lets Esc work
+        (None, KeyboardInteractivity::Exclusive)
+    } else {
+        (Some(vec![]), KeyboardInteractivity::None)
+    };
+    // iced has the input zone action but no helper function for it
+    let set_input_zone = task::effect(Action::PlatformSpecific(platform::Action::Wayland(
+        wayland::Action::LayerSurface(wayland::layer_surface::Action::InputZone {
+            id: surface_id,
+            zone,
+        }),
+    )));
+    cosmic::iced::Task::batch([
+        set_input_zone,
+        set_keyboard_interactivity(surface_id, keyboard),
+    ])
+}
+
+/// Where the keys would sit for each position, as a drop target in arrange mode
+fn spot_bounds(
+    position: OverlayPosition,
+    bounds: cosmic::iced::Rectangle,
+    margin: f32,
+    key_size: f32,
+) -> cosmic::iced::Rectangle {
+    let width = (bounds.width * 0.28).min(360.0);
+    let height = key_size * 1.6;
+    let x = match position {
+        OverlayPosition::TopLeft | OverlayPosition::BottomLeft => margin,
+        OverlayPosition::TopCenter | OverlayPosition::BottomCenter => (bounds.width - width) / 2.0,
+        OverlayPosition::TopRight | OverlayPosition::BottomRight => bounds.width - width - margin,
+    };
+    let y = match position {
+        OverlayPosition::TopLeft | OverlayPosition::TopCenter | OverlayPosition::TopRight => margin,
+        _ => bounds.height - height - margin,
+    };
+    cosmic::iced::Rectangle {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// Arrange mode: dims the screen and draws the six spots the keys can snap to.
+/// Pressing on a spot and releasing on another (or clicking one) moves the keys there.
+#[derive(Debug)]
+struct ArrangeCanvas {
+    position: OverlayPosition,
+    margin: f32,
+    key_size: f32,
+}
+
+impl ArrangeCanvas {
+    fn spot_at(
+        &self,
+        bounds: cosmic::iced::Rectangle,
+        cursor: cosmic::iced::mouse::Cursor,
+    ) -> Option<OverlayPosition> {
+        let point = cursor.position_in(bounds)?;
+        let local = cosmic::iced::Rectangle {
+            x: 0.0,
+            y: 0.0,
+            ..bounds
+        };
+        crate::config::OverlayPosition::ALL
+            .iter()
+            .copied()
+            .find(|p| spot_bounds(*p, local, self.margin, self.key_size).contains(point))
+    }
+}
+
+impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for ArrangeCanvas {
+    /// Whether a press started on a spot, so the release can complete a drag
+    type State = bool;
+
+    fn update(
+        &self,
+        pressed: &mut bool,
+        event: &cosmic::iced::Event,
+        bounds: cosmic::iced::Rectangle,
+        cursor: cosmic::iced::mouse::Cursor,
+    ) -> Option<cosmic::widget::canvas::Action<Message>> {
+        use cosmic::iced::mouse::{Button, Event as Mouse};
+        use cosmic::widget::canvas::Action;
+        match event {
+            cosmic::iced::Event::Mouse(Mouse::ButtonPressed(Button::Left)) => {
+                self.spot_at(bounds, cursor)?;
+                *pressed = true;
+                Some(Action::capture())
+            }
+            cosmic::iced::Event::Mouse(Mouse::ButtonReleased(Button::Left)) if *pressed => {
+                *pressed = false;
+                let spot = self.spot_at(bounds, cursor)?;
+                Some(Action::publish(Message::SetPosition(spot)).and_capture())
+            }
+            // Redraw so the spot under the pointer lights up
+            cosmic::iced::Event::Mouse(Mouse::CursorMoved { .. }) => Some(Action::request_redraw()),
+            _ => None,
+        }
+    }
+
+    fn draw(
+        &self,
+        pressed: &bool,
+        renderer: &cosmic::Renderer,
+        theme: &cosmic::Theme,
+        bounds: cosmic::iced::Rectangle,
+        cursor: cosmic::iced::mouse::Cursor,
+    ) -> Vec<cosmic::widget::canvas::Geometry> {
+        use cosmic::iced::Color;
+        use cosmic::widget::canvas::{Frame, LineDash, Path, Stroke};
+
+        let mut frame = Frame::new(renderer, bounds.size());
+        let local = cosmic::iced::Rectangle {
+            x: 0.0,
+            y: 0.0,
+            ..bounds
+        };
+        frame.fill_rectangle(
+            local.position(),
+            local.size(),
+            Color::from_rgba(0.0, 0.0, 0.0, 0.35),
+        );
+
+        let accent = Color::from(theme.cosmic().accent_color());
+        let hovered = self.spot_at(bounds, cursor);
+        for position in crate::config::OverlayPosition::ALL.iter().copied() {
+            let spot = spot_bounds(position, local, self.margin, self.key_size);
+            let path = Path::rounded_rectangle(spot.position(), spot.size(), 10.0.into());
+            if position == self.position {
+                frame.fill(&path, with_opacity(accent, 0.15));
+                frame.stroke(&path, Stroke::default().with_color(accent).with_width(2.0));
+            } else if hovered == Some(position) {
+                let highlight = if *pressed { 0.2 } else { 0.08 };
+                frame.fill(&path, with_opacity(Color::WHITE, highlight));
+                frame.stroke(
+                    &path,
+                    Stroke::default().with_color(Color::WHITE).with_width(2.0),
+                );
+            } else {
+                frame.stroke(
+                    &path,
+                    Stroke {
+                        line_dash: LineDash {
+                            segments: &[6.0, 5.0],
+                            offset: 0,
+                        },
+                        ..Stroke::default()
+                            .with_color(with_opacity(Color::WHITE, 0.5))
+                            .with_width(1.5)
+                    },
+                );
+            }
+        }
+        vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        pressed: &bool,
+        bounds: cosmic::iced::Rectangle,
+        cursor: cosmic::iced::mouse::Cursor,
+    ) -> cosmic::iced::mouse::Interaction {
+        use cosmic::iced::mouse::Interaction;
+        match self.spot_at(bounds, cursor) {
+            Some(_) if *pressed => Interaction::Grabbing,
+            Some(_) => Interaction::Pointer,
+            None => Interaction::default(),
+        }
+    }
+}
+
+/// The arrange mode toolbar: size, distance from the edge, line length, and finishing
+fn arrange_toolbar(frame: &Snapshot) -> cosmic::Element<'static, Message> {
+    use cosmic::widget;
+
+    let stepper = |label: String, less: Message, more: Message| {
+        widget::Row::new()
+            .spacing(4)
+            .align_y(cosmic::iced::Alignment::Center)
+            .push(widget::button::standard("−").on_press(less))
+            .push(
+                widget::text::body(label)
+                    .width(cosmic::iced::Length::Fixed(96.0))
+                    .align_x(cosmic::iced::alignment::Horizontal::Center),
+            )
+            .push(widget::button::standard("+").on_press(more))
+    };
+    let length = match frame.theme.layout {
+        Layout::Keys => format!("{} keys", frame.history_count),
+        Layout::Text => format!(
+            "{:.0} px long",
+            frame.line_width.unwrap_or(frame.theme.line_width)
+        ),
+    };
+
+    let buttons = widget::Row::new()
+        .spacing(16)
+        .align_y(cosmic::iced::Alignment::Center)
+        .push(stepper(
+            format!("Size {:.0}", frame.key_size),
+            Message::NudgeSize(-4.0),
+            Message::NudgeSize(4.0),
+        ))
+        .push(stepper(
+            format!("{:.0} px from edge", frame.margin),
+            Message::NudgeMargin(-4.0),
+            Message::NudgeMargin(4.0),
+        ))
+        .push(stepper(
+            length,
+            Message::NudgeLength(-1),
+            Message::NudgeLength(1),
+        ))
+        .push(widget::button::standard("Reset").on_press(Message::ResetArrangement))
+        .push(widget::button::standard("Cancel").on_press(Message::CancelArranging))
+        .push(widget::button::suggested("Done").on_press(Message::FinishArranging));
+
+    widget::container(
+        widget::Column::new()
+            .spacing(10)
+            .align_x(cosmic::iced::Alignment::Center)
+            .push(buttons)
+            .push(widget::text::caption(
+                "Click a spot, or drag from one spot to another, to move the keys. \
+                 Esc cancels. Arranging ends by itself after a minute without input.",
+            )),
+    )
+    .padding(16)
+    .class(cosmic::theme::Container::custom(|theme| {
+        let cosmic = theme.cosmic();
+        cosmic::widget::container::Style {
+            background: Some(cosmic::iced::Color::from(cosmic.bg_color()).into()),
+            text_color: Some(cosmic::iced::Color::from(cosmic.on_bg_color())),
+            border: cosmic::iced::Border {
+                radius: cosmic.radius_m().into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }))
+    .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snap_spots_fit_and_dont_overlap() {
+        for (width, height) in [(1920.0, 1080.0), (1280.0, 800.0)] {
+            let screen = cosmic::iced::Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height,
+            };
+            let spots: Vec<_> = OverlayPosition::ALL
+                .iter()
+                .map(|p| spot_bounds(*p, screen, 20.0, 160.0))
+                .collect();
+            for (i, a) in spots.iter().enumerate() {
+                assert!(a.x >= 0.0 && a.y >= 0.0);
+                assert!(a.x + a.width <= width && a.y + a.height <= height);
+                for b in &spots[i + 1..] {
+                    assert!(a.intersection(b).is_none(), "{a:?} overlaps {b:?}");
+                }
+            }
+        }
+    }
 }

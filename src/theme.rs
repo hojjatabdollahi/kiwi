@@ -108,6 +108,16 @@ pub enum Repeats {
     Hidden,
 }
 
+/// How the input history is laid out
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Layout {
+    /// One key (or combination) after another
+    #[default]
+    Keys,
+    /// A line of text: typed letters join into words, anything else is a small key
+    Text,
+}
+
 /// A single strip drawn behind all the keys. Themes without one draw keys on their own.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -144,6 +154,11 @@ impl Default for KeyStyle {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Theme {
+    /// Key size until it's resized on screen, and what Reset goes back to
+    pub default_size: f32,
+    pub layout: Layout,
+    /// Width of the line in the `Text` layout; older text fades out and scrolls off its far end
+    pub line_width: f32,
     pub key: KeyStyle,
     pub rail: Option<RailStyle>,
     /// Tint single-color icons with the key text color. Turn off for full-color icons.
@@ -195,13 +210,35 @@ impl Theme {
                     ..RailStyle::default()
                 }),
             ),
+            // Typed text as a line, shortcuts as small keys inside it
+            BuiltinTheme::Typewriter => (
+                KeyStyle {
+                    background: Fill::Solid(Hex(Color::from_rgba(1.0, 1.0, 1.0, 0.1))),
+                    radius: 5.0,
+                    repeats: Repeats::Inline,
+                    ..keys
+                },
+                Some(RailStyle {
+                    radius: 10.0,
+                    padding: 8.0,
+                    ..RailStyle::default()
+                }),
+            ),
             BuiltinTheme::Dark
             | BuiltinTheme::Light
             | BuiltinTheme::Frosted
             | BuiltinTheme::Kiwi => (keys, None),
         };
 
+        let layout = match builtin {
+            BuiltinTheme::Typewriter => Layout::Text,
+            _ => Layout::Keys,
+        };
+
         Self {
+            default_size: 64.0,
+            layout,
+            line_width: 460.0,
             key,
             rail,
             recolor_icons: true,
@@ -245,7 +282,10 @@ impl Theme {
                 repeats: Repeats::Badge,
             },
             // Translucent glass with a gradient (the rail themes use these colors too)
-            BuiltinTheme::Frosted | BuiltinTheme::Ribbon | BuiltinTheme::Tape => KeyStyle {
+            BuiltinTheme::Frosted
+            | BuiltinTheme::Ribbon
+            | BuiltinTheme::Tape
+            | BuiltinTheme::Typewriter => KeyStyle {
                 background: Fill::Gradient(rgba(0.3, 0.35, 0.45, 0.5), rgba(0.2, 0.25, 0.35, 0.4)),
                 pressed: rgba(0.4, 0.5, 0.7, 0.7),
                 border: stroke(rgba(1.0, 1.0, 1.0, 0.2)),

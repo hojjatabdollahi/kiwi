@@ -11,8 +11,7 @@ use std::sync::Arc;
 
 use crate::config::{IconStyle, KeyDisplayMode, OverlayPosition, APP_VERSION};
 use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke};
-use crate::position_selector::PositionSelector;
-use crate::theme::{Theme, ThemeChoice};
+use crate::theme::{Layout, Theme, ThemeChoice};
 use crate::Message;
 
 // Checkerboard pattern SVG for transparency preview
@@ -29,24 +28,20 @@ const CHECKERBOARD_SVG: &[u8] =
 
 /// Renders the settings view for the application
 pub fn settings_view(
-    key_size: f32,
     fade_duration: f32,
     themes: &[(ThemeChoice, Arc<Theme>)],
     current_theme: &ThemeChoice,
     theme_message: Option<&str>,
     position: OverlayPosition,
+    margin: f32,
     key_display_mode: KeyDisplayMode,
     icon_style: IconStyle,
-    history_count: u8,
     is_active: bool,
     show_keyboard: bool,
     show_mouse: bool,
     show_gestures: bool,
     show_touch: bool,
 ) -> Element<'static, Message> {
-    // Position selector widget (larger size for better visibility)
-    let position_selector = PositionSelector::new(200.0, position, Message::SetPosition);
-
     // Theme gallery: two cards per row, each drawn with its own theme
     let mut theme_grid = widget::Column::new().spacing(8);
     for pair in themes.chunks(2) {
@@ -87,11 +82,6 @@ pub fn settings_view(
     if let Some(message) = theme_message {
         theme_section = theme_section.push(widget::text::caption(message.to_string()));
     }
-
-    let position_container = widget::container(position_selector)
-        .width(Length::Fill)
-        .padding([10, 0]) // vertical padding
-        .align_x(cosmic::iced::alignment::Horizontal::Center);
 
     // Key Display Mode radio buttons
     let display_mode_section = widget::Column::new()
@@ -203,15 +193,6 @@ pub fn settings_view(
         // Separator
         .push(widget::divider::horizontal::default())
         .push(theme_section)
-        .push(
-            widget::Row::new()
-                .spacing(10)
-                .align_y(cosmic::iced::Alignment::Center)
-                .push(widget::text::body(format!("Size: {:.0}", key_size)))
-                .push(
-                    widget::slider(32.0..=160.0, key_size, Message::SetKeySize).width(Length::Fill),
-                ),
-        )
         // Separator
         .push(widget::divider::horizontal::default())
         // Fade slider
@@ -225,23 +206,26 @@ pub fn settings_view(
                         .width(Length::Fill),
                 ),
         )
-        // History count slider
+        .push(widget::divider::horizontal::default())
+        // Placement: size, position and length are set on screen
+        .push(widget::text::body("Placement"))
         .push(
             widget::Row::new()
                 .spacing(10)
                 .align_y(cosmic::iced::Alignment::Center)
-                .push(widget::text::body(format!("History: {}", history_count)))
                 .push(
-                    widget::slider(1.0..=10.0, history_count as f32, |v| {
-                        Message::SetHistoryCount(v as u8)
-                    })
+                    widget::text::caption(format!(
+                        "{}, {:.0} px from the edge",
+                        position.name(),
+                        margin
+                    ))
                     .width(Length::Fill),
+                )
+                .push(
+                    widget::button::suggested("Arrange on screen")
+                        .on_press(Message::StartArranging),
                 ),
-        )
-        .push(widget::divider::horizontal::default())
-        // Position selector (centered, no label, with padding)
-        .push(widget::text::body("Position"))
-        .push(position_container);
+        );
 
     // Version text (bottom right)
     let version_text = widget::text::caption(format!("v{}", APP_VERSION)).class(
@@ -274,7 +258,7 @@ pub fn settings_view(
         .into()
 }
 
-/// A clickable theme card showing "V" then "Ctrl + C" drawn with that theme
+/// A clickable theme card showing a short sample drawn with that theme
 fn theme_card(
     choice: &ThemeChoice,
     theme: &Theme,
@@ -285,16 +269,23 @@ fn theme_card(
         ctrl: true,
         ..Default::default()
     };
-    let keys = [
-        Keystroke::single("V", false),
-        Keystroke::combination(&ctrl, "C", false),
-    ];
+    let key = |k: &str| Keystroke::single(k, false);
+    let keys = match theme.layout {
+        Layout::Keys => vec![key("V"), Keystroke::combination(&ctrl, "C", false)],
+        Layout::Text => vec![
+            key("g"),
+            key("i"),
+            key("t"),
+            Keystroke::combination(&ctrl, "S", false),
+        ],
+    };
     // Right-aligned so the order reads left to right, like typing
     let sample = keystrokes_row::<Message>(
         &keys,
         26.0,
         60.0, // long enough that the sample never fades
         theme,
+        110.0, // a typewriter line short enough to fit the card
         OverlayPosition::TopRight,
         keys.len(),
         icon_style,

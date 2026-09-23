@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use crate::config::{IconStyle, OverlayPosition};
-use crate::theme::{Fill, Repeats, Theme};
+use crate::theme::{Fill, Layout, RailStyle, Repeats, Theme};
 
 // Bundled font for keystroke text
 const FONT_BYTES: &[u8] = include_bytes!("../data/GemunuLibre-VariableFont_wght.ttf");
@@ -562,25 +562,18 @@ fn wrap_with_badge_area<'a, M: 'a>(
     col.into()
 }
 
-/// Renders a keystroke widget with opacity based on age
+/// Renders a keystroke widget at the given opacity
 ///
 /// - Single key: square with border
 /// - Combination: outer container with border, inner key boxes (no border) + "+" separators
-/// - If `fade_enabled` is false, the widget will always be fully opaque
-pub fn keystroke_widget<'a, M: 'a>(
+fn keystroke_widget<'a, M: 'a>(
     keystroke: &Keystroke,
     key_size: f32,
-    fade_duration: f32,
+    opacity: f32,
     theme: &Theme,
-    fade_enabled: bool,
     position: OverlayPosition,
     icon_style: IconStyle,
 ) -> Element<'a, M> {
-    let opacity = if fade_enabled {
-        keystroke.opacity(fade_duration)
-    } else {
-        1.0
-    };
     let plus_font_size = plus_font_size_for_key(key_size);
     let style = theme.key;
     let fade = |color: Color| Color {
@@ -710,10 +703,23 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     key_size: f32,
     fade_duration: f32,
     theme: &Theme,
+    line_width: f32,
     position: OverlayPosition,
     history_count: usize,
     icon_style: IconStyle,
 ) -> Element<'a, M> {
+    if theme.layout == Layout::Text {
+        return typewriter_line(
+            keystrokes,
+            key_size,
+            fade_duration,
+            theme,
+            line_width,
+            position,
+            icon_style,
+        );
+    }
+
     // Filter non-expired keystrokes, newest first, limit count
     let mut visible_keystrokes: Vec<&Keystroke> = keystrokes
         .iter()
@@ -737,9 +743,8 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
             keystroke_widget(
                 k,
                 key_size,
-                fade_duration,
+                k.opacity(fade_duration),
                 theme,
-                true,
                 position,
                 icon_style,
             )
@@ -750,7 +755,10 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     // (newest should appear on the right edge)
     let is_right_aligned = matches!(
         position,
-        OverlayPosition::TopRight | OverlayPosition::BottomRight | OverlayPosition::BottomCenter
+        OverlayPosition::TopRight
+            | OverlayPosition::BottomRight
+            | OverlayPosition::TopCenter
+            | OverlayPosition::BottomCenter
     );
 
     let is_bottom = matches!(
@@ -809,31 +817,236 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         }
     };
 
-    let background = fill_background(rail.background, rail_opacity);
+    on_rail(
+        widget::row::with_children(children)
+            .spacing(theme.key.gap)
+            .align_y(iced::Alignment::Center)
+            .into(),
+        &rail,
+        rail_opacity,
+    )
+}
+
+/// Put `content` on the theme's rail, faded to `opacity`
+fn on_rail<'a, M: 'a>(content: Element<'a, M>, rail: &RailStyle, opacity: f32) -> Element<'a, M> {
+    let background = fill_background(rail.background, opacity);
     let border = Border {
-        color: fade(rail.border.color.0),
+        color: Color {
+            a: rail.border.color.0.a * opacity,
+            ..rail.border.color.0
+        },
         width: rail.border.width,
         radius: rail.radius.into(),
     };
-    widget::container(
-        widget::row::with_children(children)
-            .spacing(theme.key.gap)
-            .align_y(iced::Alignment::Center),
-    )
-    .padding(rail.padding)
-    .class(cosmic::theme::Container::custom(move |_| {
-        container::Style {
-            background: Some(background),
-            border,
-            ..Default::default()
+    widget::container(content)
+        .padding(rail.padding)
+        .class(cosmic::theme::Container::custom(move |_| {
+            container::Style {
+                background: Some(background),
+                border,
+                ..Default::default()
+            }
+        }))
+        .into()
+}
+
+/// One piece of the typewriter line
+#[derive(Debug)]
+enum LinePiece<'k> {
+    /// Text typed by one keystroke (several characters when it was repeated)
+    Text(String, &'k Keystroke),
+    /// Anything that isn't typing, drawn as a small key
+    Key(&'k Keystroke),
+}
+
+/// The text a keystroke typed, if it was plain typing. Shift is allowed, since
+/// that's how capitals and symbols are typed; any other modifier makes it a shortcut.
+fn typed_text(keystroke: &Keystroke) -> Option<String> {
+    let (key, modifiers) = keystroke.keys.split_last()?;
+    if modifiers.iter().any(|m| m != "⇧") {
+        return None;
+    }
+    let typed = match key.as_str() {
+        " " | "␣" => ' ',
+        other => {
+            let mut chars = other.chars();
+            let c = chars.next()?;
+            // Single characters only; names like "Tab" and symbols like "↵" are keys
+            if chars.next().is_some() || c.is_control() || matches!(c, '↵' | '⌫' | '⇧') {
+                return None;
+            }
+            c
         }
-    }))
-    .into()
+    };
+    Some(typed.to_string().repeat(keystroke.count as usize))
+}
+
+/// Turn keystrokes (oldest first) into the typewriter line
+fn line_pieces<'k>(keystrokes: impl IntoIterator<Item = &'k Keystroke>) -> Vec<LinePiece<'k>> {
+    keystrokes
+        .into_iter()
+        .map(|keystroke| match typed_text(keystroke) {
+            Some(text) => LinePiece::Text(text, keystroke),
+            None => LinePiece::Key(keystroke),
+        })
+        .collect()
+}
+
+/// The `Text` layout: a fixed-width line with the newest input at its end.
+/// Older input fades by age and also toward the line's far end, then scrolls off.
+fn typewriter_line<'a, M: 'a>(
+    keystrokes: &[Keystroke],
+    key_size: f32,
+    fade_duration: f32,
+    theme: &Theme,
+    width: f32,
+    position: OverlayPosition,
+    icon_style: IconStyle,
+) -> Element<'a, M> {
+    let font_size = font_size_for_key(key_size);
+    let small_key = key_size * 0.7;
+    let key_margin = small_key * 0.15;
+    // The oldest 30% of the line fades out
+    let fade_from = width * 0.7;
+    // ponytail: widths are estimated from font size, not measured; the line is
+    // clipped, so a bad guess only fades or cuts text a little early or late
+    let char_width = font_size * 0.5;
+    let space_width = font_size * 0.3;
+
+    let pieces = line_pieces(keystrokes.iter().filter(|k| !k.is_expired(fade_duration)));
+    let text_color = theme.key.text.0;
+    let mut children: Vec<Element<'a, M>> = Vec::new();
+    let mut rail_opacity: f32 = 0.0;
+    let mut x = 0.0;
+
+    // A caret after text shows where the next letter goes
+    if matches!(pieces.last(), Some(LinePiece::Text(..))) {
+        children.push(
+            widget::container(widget::Space::new())
+                .width(Length::Fixed(2.0))
+                .height(Length::Fixed(font_size))
+                .class(cosmic::theme::Container::custom(move |_| {
+                    container::Style {
+                        background: Some(Background::Color(text_color)),
+                        ..Default::default()
+                    }
+                }))
+                .into(),
+        );
+        x += 4.0;
+    }
+
+    // Newest first, until the line is full
+    for piece in pieces.iter().rev() {
+        if x >= width {
+            break;
+        }
+        let (piece_width, keystroke) = match piece {
+            LinePiece::Text(text, k) if text.starts_with(' ') => {
+                (text.len() as f32 * space_width, k)
+            }
+            LinePiece::Text(text, k) => (text.chars().count() as f32 * char_width, k),
+            LinePiece::Key(k) => {
+                let parts = k.keys.len() as f32;
+                let repeat = if k.count > 1 { small_key * 0.45 } else { 0.0 };
+                (
+                    parts * small_key + (parts - 1.0) * PLUS_WIDTH + repeat + 2.0 * key_margin,
+                    k,
+                )
+            }
+        };
+        // 1.0 until the piece reaches the fade zone, down to 0.0 at the line's far end
+        let edge = ((width - x - piece_width) / (width - fade_from)).clamp(0.0, 1.0);
+        let age = keystroke.opacity(fade_duration);
+        rail_opacity = rail_opacity.max(age);
+        let opacity = age * edge;
+        x += piece_width;
+
+        children.push(match piece {
+            LinePiece::Text(text, _) if text.starts_with(' ') => widget::Space::new()
+                .width(Length::Fixed(piece_width))
+                .into(),
+            LinePiece::Text(text, _) => text::Text::new(text.clone())
+                .size(font_size)
+                .font(cosmic::iced::Font {
+                    family: cosmic::iced::font::Family::Name(FONT_NAME),
+                    weight: cosmic::iced::font::Weight::Bold,
+                    ..Default::default()
+                })
+                .wrapping(cosmic::iced::widget::text::Wrapping::None)
+                .class(cosmic::theme::Text::Color(Color {
+                    a: text_color.a * opacity,
+                    ..text_color
+                }))
+                .into(),
+            LinePiece::Key(k) => widget::container(keystroke_widget(
+                k, small_key, opacity, theme, position, icon_style,
+            ))
+            .padding([0.0, key_margin])
+            .into(),
+        });
+    }
+    children.reverse();
+
+    let line: Element<'a, M> =
+        widget::container(widget::row::with_children(children).align_y(iced::Alignment::Center))
+            .width(Length::Fixed(width))
+            .height(Length::Fixed(key_size))
+            .align_x(iced::alignment::Horizontal::Right)
+            .align_y(iced::alignment::Vertical::Center)
+            .clip(true)
+            .into();
+
+    match &theme.rail {
+        Some(rail) => on_rail(line, rail, rail_opacity),
+        None => line,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The text a typewriter line shows, with keys as `[Key+Key]`
+    fn line(keystrokes: &[Keystroke]) -> String {
+        line_pieces(keystrokes)
+            .iter()
+            .map(|piece| match piece {
+                LinePiece::Text(text, _) => text.clone(),
+                LinePiece::Key(k) => format!("[{}]", k.keys.join("+")),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn typewriter_joins_text() {
+        let shift = KeyModifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let ctrl = KeyModifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        let key = |k: &str| Keystroke::single(k, false);
+        let repeated = |k: &str, count| Keystroke { count, ..key(k) };
+
+        let typed = [
+            Keystroke::combination(&shift, "H", false),
+            key("e"),
+            repeated("l", 2),
+            key("o"),
+            key(" "),
+            key("w"),
+            repeated("⌫", 3),
+            Keystroke::combination(&ctrl, "S", false),
+            key("↵"),
+            Keystroke::combination(&shift, "@", false),
+        ];
+        // Backspace is shown as a key, not applied to the text
+        assert_eq!(line(&typed), "Hello w[⌫][Ctrl+S][↵]@");
+        assert_eq!(line(&[key("␣"), key("Tab"), key("⇧")]), " [Tab][⇧]");
+    }
 
     #[test]
     fn tablet_labels_resolve() {

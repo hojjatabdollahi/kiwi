@@ -19,12 +19,14 @@ pub enum BuiltinTheme {
     Kiwi,
     Ribbon,
     Tape,
+    Typewriter,
 }
 
 /// Position of the overlay on screen
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OverlayPosition {
     TopLeft,
+    TopCenter,
     TopRight,
     #[default]
     BottomLeft,
@@ -85,19 +87,21 @@ impl KeyDisplayMode {
 impl OverlayPosition {
     pub const ALL: &'static [OverlayPosition] = &[
         OverlayPosition::TopLeft,
+        OverlayPosition::TopCenter,
         OverlayPosition::TopRight,
         OverlayPosition::BottomLeft,
-        OverlayPosition::BottomRight,
         OverlayPosition::BottomCenter,
+        OverlayPosition::BottomRight,
     ];
 
     pub fn name(&self) -> &'static str {
         match self {
-            OverlayPosition::TopLeft => "Top Left",
-            OverlayPosition::TopRight => "Top Right",
-            OverlayPosition::BottomLeft => "Bottom Left",
-            OverlayPosition::BottomRight => "Bottom Right",
-            OverlayPosition::BottomCenter => "Bottom Center",
+            OverlayPosition::TopLeft => "Top left",
+            OverlayPosition::TopCenter => "Top center",
+            OverlayPosition::TopRight => "Top right",
+            OverlayPosition::BottomLeft => "Bottom left",
+            OverlayPosition::BottomCenter => "Bottom center",
+            OverlayPosition::BottomRight => "Bottom right",
         }
     }
 }
@@ -110,6 +114,7 @@ impl BuiltinTheme {
         BuiltinTheme::Kiwi,
         BuiltinTheme::Ribbon,
         BuiltinTheme::Tape,
+        BuiltinTheme::Typewriter,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -120,6 +125,7 @@ impl BuiltinTheme {
             BuiltinTheme::Kiwi => "Kiwi",
             BuiltinTheme::Ribbon => "Ribbon",
             BuiltinTheme::Tape => "Tape",
+            BuiltinTheme::Typewriter => "Typewriter",
         }
     }
 }
@@ -140,6 +146,10 @@ pub struct Config {
     pub user_theme: Option<String>,
     /// Position of the overlay on screen
     pub position: OverlayPosition,
+    /// Distance between the keys and the screen edge (pixels)
+    pub margin: f32,
+    /// Width of the typewriter line, overriding the theme's
+    pub line_width: Option<f32>,
     /// Key display mode - typed character or physical key
     pub key_display_mode: KeyDisplayMode,
     /// Icon style - symbols or text
@@ -165,6 +175,8 @@ impl Default for Config {
             palette: BuiltinTheme::Frosted,
             user_theme: None,
             position: OverlayPosition::TopRight,
+            margin: 20.0,
+            line_width: None,
             key_display_mode: KeyDisplayMode::TypedCharacter,
             icon_style: IconStyle::Symbol,
             history_count: 5,
