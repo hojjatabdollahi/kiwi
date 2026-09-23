@@ -19,7 +19,7 @@ use cosmic::iced::Color;
 use cosmic::widget::svg;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::config::PaletteType;
+use crate::config::BuiltinTheme;
 
 /// A color, written in theme files as "#rrggbb" or "#rrggbbaa"
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -90,6 +90,49 @@ pub struct KeyStyle {
     /// Repeat count badge ("x2")
     pub badge_text: Hex,
     pub badge_background: Hex,
+    /// Background of a released combination (like "Ctrl + C"); `None` uses `background`
+    pub combo_background: Option<Fill>,
+    /// How a key pressed several times in a row is shown
+    pub repeats: Repeats,
+}
+
+/// How a key pressed several times in a row is shown
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Repeats {
+    /// "x3" in a small badge above or below the key
+    #[default]
+    Badge,
+    /// "×3" inside the key, after its label
+    Inline,
+    /// Not shown
+    Hidden,
+}
+
+/// A single strip drawn behind all the keys. Themes without one draw keys on their own.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RailStyle {
+    pub background: Fill,
+    pub border: Stroke,
+    /// Corner radius; anything past half the height gives round ends
+    pub radius: f32,
+    /// Space between the rail's edge and the keys
+    pub padding: f32,
+    /// A thin line of this color between keys
+    pub divider: Option<Hex>,
+}
+
+impl Default for RailStyle {
+    fn default() -> Self {
+        let frosted = Theme::keys(BuiltinTheme::Frosted);
+        Self {
+            background: frosted.background,
+            border: frosted.border,
+            radius: 8.0,
+            padding: 0.0,
+            divider: None,
+        }
+    }
 }
 
 impl Default for KeyStyle {
@@ -102,6 +145,7 @@ impl Default for KeyStyle {
 #[serde(default)]
 pub struct Theme {
     pub key: KeyStyle,
+    pub rail: Option<RailStyle>,
     /// Tint single-color icons with the key text color. Turn off for full-color icons.
     pub recolor_icons: bool,
     /// Icons from the theme's `icons/` folder, by file name without `.svg`
@@ -110,15 +154,70 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// The built-in theme for one of the classic palettes
-    pub fn builtin(palette: PaletteType) -> Self {
+    pub fn builtin(builtin: BuiltinTheme) -> Self {
+        let keys = Self::keys(builtin);
+        let clear = Fill::Solid(Hex(Color::TRANSPARENT));
+        let no_border = Stroke {
+            color: Hex(Color::TRANSPARENT),
+            width: 0.0,
+        };
+
+        let (key, rail) = match builtin {
+            // Bare labels on one round-ended strip; combinations sit on a faint pill
+            BuiltinTheme::Ribbon => (
+                KeyStyle {
+                    background: clear,
+                    combo_background: Some(Fill::Solid(Hex(Color::from_rgba(1.0, 1.0, 1.0, 0.1)))),
+                    border: no_border,
+                    radius: 999.0,
+                    gap: 6.0,
+                    repeats: Repeats::Inline,
+                    ..keys
+                },
+                Some(RailStyle {
+                    radius: 999.0,
+                    padding: 6.0,
+                    ..RailStyle::default()
+                }),
+            ),
+            // One strip split into cells by thin lines
+            BuiltinTheme::Tape => (
+                KeyStyle {
+                    background: clear,
+                    border: no_border,
+                    radius: 0.0,
+                    gap: 0.0,
+                    repeats: Repeats::Inline,
+                    ..keys
+                },
+                Some(RailStyle {
+                    divider: Some(Hex(Color::from_rgba(1.0, 1.0, 1.0, 0.14))),
+                    ..RailStyle::default()
+                }),
+            ),
+            BuiltinTheme::Dark
+            | BuiltinTheme::Light
+            | BuiltinTheme::Frosted
+            | BuiltinTheme::Kiwi => (keys, None),
+        };
+
+        Self {
+            key,
+            rail,
+            recolor_icons: true,
+            icons: HashMap::new(),
+        }
+    }
+
+    /// Colors and shapes of separate keycaps, which the rail themes then adjust
+    fn keys(builtin: BuiltinTheme) -> KeyStyle {
         let rgb = |r, g, b| Hex(Color::from_rgb(r, g, b));
         let rgba = |r, g, b, a| Hex(Color::from_rgba(r, g, b, a));
         let stroke = |color| Stroke { color, width: 1.0 };
 
-        let key = match palette {
+        match builtin {
             // Classic dark with a subtle blue pressed state
-            PaletteType::Dark => KeyStyle {
+            BuiltinTheme::Dark => KeyStyle {
                 background: Fill::Solid(rgba(0.0, 0.0, 0.0, 0.4)),
                 pressed: rgba(0.2, 0.2, 0.5, 0.5),
                 border: stroke(rgba(1.0, 1.0, 1.0, 0.25)),
@@ -128,9 +227,11 @@ impl Theme {
                 separator: rgba(1.0, 1.0, 1.0, 0.5),
                 badge_text: rgba(1.0, 1.0, 1.0, 1.0),
                 badge_background: rgba(0.0, 0.0, 0.0, 0.6),
+                combo_background: None,
+                repeats: Repeats::Badge,
             },
             // Bright with dark text
-            PaletteType::Light => KeyStyle {
+            BuiltinTheme::Light => KeyStyle {
                 background: Fill::Solid(rgba(0.95, 0.95, 0.97, 0.45)),
                 pressed: rgba(0.6, 0.65, 0.85, 0.5),
                 border: stroke(rgba(0.3, 0.3, 0.4, 0.3)),
@@ -140,9 +241,11 @@ impl Theme {
                 separator: rgba(0.2, 0.2, 0.3, 0.6),
                 badge_text: rgba(0.1, 0.1, 0.15, 1.0),
                 badge_background: rgba(1.0, 1.0, 1.0, 0.7),
+                combo_background: None,
+                repeats: Repeats::Badge,
             },
-            // Translucent glass with a gradient
-            PaletteType::Frosted => KeyStyle {
+            // Translucent glass with a gradient (the rail themes use these colors too)
+            BuiltinTheme::Frosted | BuiltinTheme::Ribbon | BuiltinTheme::Tape => KeyStyle {
                 background: Fill::Gradient(rgba(0.3, 0.35, 0.45, 0.5), rgba(0.2, 0.25, 0.35, 0.4)),
                 pressed: rgba(0.4, 0.5, 0.7, 0.7),
                 border: stroke(rgba(1.0, 1.0, 1.0, 0.2)),
@@ -152,9 +255,11 @@ impl Theme {
                 separator: rgba(1.0, 1.0, 1.0, 0.6),
                 badge_text: rgba(1.0, 1.0, 1.0, 1.0),
                 badge_background: rgba(0.1, 0.15, 0.25, 0.7),
+                combo_background: None,
+                repeats: Repeats::Badge,
             },
             // Kiwi green flesh, brown skin border, cream and seed-colored badge
-            PaletteType::Kiwi => KeyStyle {
+            BuiltinTheme::Kiwi => KeyStyle {
                 background: Fill::Gradient(
                     rgba(0.55, 0.75, 0.25, 0.55),
                     rgba(0.7, 0.82, 0.45, 0.45),
@@ -167,13 +272,9 @@ impl Theme {
                 separator: rgba(0.85, 0.9, 0.75, 0.8),
                 badge_text: rgba(0.15, 0.12, 0.08, 1.0),
                 badge_background: rgba(0.95, 0.93, 0.85, 0.85),
+                combo_background: None,
+                repeats: Repeats::Badge,
             },
-        };
-
-        Self {
-            key,
-            recolor_icons: true,
-            icons: HashMap::new(),
         }
     }
 
@@ -210,7 +311,7 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::builtin(PaletteType::Frosted)
+        Self::builtin(BuiltinTheme::Frosted)
     }
 }
 
@@ -252,7 +353,7 @@ pub fn themes_dir() -> PathBuf {
 /// Which theme is in use: a built-in palette or a user theme folder
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThemeChoice {
-    Builtin(PaletteType),
+    Builtin(BuiltinTheme),
     User(String),
 }
 
@@ -282,7 +383,7 @@ impl ThemeChoice {
             .collect();
         user.sort();
 
-        PaletteType::ALL
+        BuiltinTheme::ALL
             .iter()
             .map(|palette| Self::Builtin(*palette))
             .chain(user.into_iter().map(Self::User))
@@ -484,6 +585,16 @@ mod tests {
 
         let empty: Theme = ron::from_str("()").unwrap();
         assert_eq!(empty, Theme::default());
+        assert_eq!(empty.rail, None);
+
+        let railed: Theme = ron::from_str(
+            r##"(rail: Some((divider: Some("#ffffff24"))), key: (repeats: Inline))"##,
+        )
+        .unwrap();
+        let rail = railed.rail.unwrap();
+        assert!(rail.divider.is_some());
+        assert_eq!(rail.radius, RailStyle::default().radius);
+        assert_eq!(railed.key.repeats, Repeats::Inline);
     }
 
     /// A fresh, empty folder for one test
@@ -528,7 +639,7 @@ mod tests {
             .unwrap()
             .starts_with("// hand-written"));
         assert_eq!(
-            ThemeChoice::all(&themes)[PaletteType::ALL.len()..],
+            ThemeChoice::all(&themes)[BuiltinTheme::ALL.len()..],
             [
                 ThemeChoice::User("Mine".into()),
                 ThemeChoice::User("Mine 2".into())
@@ -536,13 +647,13 @@ mod tests {
         );
 
         let builtin = dir.join("Kiwi.zip");
-        export(&ThemeChoice::Builtin(PaletteType::Kiwi), &themes, &builtin).unwrap();
+        export(&ThemeChoice::Builtin(BuiltinTheme::Kiwi), &themes, &builtin).unwrap();
         let name = import(&builtin, &themes).unwrap();
         // Colors go through 8-bit hex, so compare what the file holds
         let border = |theme: Theme| ron::to_string(&theme.key.border).unwrap();
         assert_eq!(
             border(Theme::load(&themes.join(name)).unwrap()),
-            border(Theme::builtin(PaletteType::Kiwi))
+            border(Theme::builtin(BuiltinTheme::Kiwi))
         );
     }
 
@@ -583,7 +694,7 @@ mod tests {
 
     #[test]
     fn written_themes_read_back() {
-        for palette in PaletteType::ALL {
+        for palette in BuiltinTheme::ALL {
             let theme = Theme::builtin(*palette);
             let text = ron::to_string(&theme).unwrap();
             let read: Theme = ron::from_str(&text).unwrap();

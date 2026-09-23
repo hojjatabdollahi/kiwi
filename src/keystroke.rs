@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use crate::config::{IconStyle, OverlayPosition};
-use crate::theme::{Fill, Theme};
+use crate::theme::{Fill, Repeats, Theme};
 
 // Bundled font for keystroke text
 const FONT_BYTES: &[u8] = include_bytes!("../data/GemunuLibre-VariableFont_wght.ttf");
@@ -588,19 +588,14 @@ pub fn keystroke_widget<'a, M: 'a>(
         ..color
     };
 
-    let background = if keystroke.pressed {
-        Background::Color(fade(style.pressed.0))
+    let fill = if keystroke.pressed {
+        Fill::Solid(style.pressed)
+    } else if keystroke.is_combination() {
+        style.combo_background.unwrap_or(style.background)
     } else {
-        match style.background {
-            Fill::Solid(color) => Background::Color(fade(color.0)),
-            Fill::Gradient(start, end) => {
-                let grad = gradient::Linear::new(std::f32::consts::PI / 4.0) // 45 degree angle
-                    .add_stop(0.0, fade(start.0))
-                    .add_stop(1.0, fade(end.0));
-                Background::Gradient(gradient::Gradient::Linear(grad))
-            }
-        }
+        style.background
     };
+    let background = fill_background(fill, opacity);
 
     let border = Border {
         color: fade(style.border.color.0),
@@ -609,108 +604,105 @@ pub fn keystroke_widget<'a, M: 'a>(
     };
     let text_color = fade(style.text.0);
     let plus_color = fade(style.separator.0);
-    let count_color = fade(style.badge_text.0);
-    let count_bg = fade(style.badge_background.0);
 
-    if keystroke.is_combination() {
-        // Combination: outer border, inner key boxes without borders
-        let mut row_children: Vec<Element<'a, M>> = Vec::new();
-
-        for (i, key) in keystroke.keys.iter().enumerate() {
-            if i > 0 {
-                // Add "+" separator (fixed width, centered)
-                row_children.push(
-                    widget::container(
-                        text::Text::new("+")
-                            .size(plus_font_size)
-                            .class(cosmic::theme::Text::Color(plus_color))
-                            .align_x(iced::alignment::Horizontal::Center)
-                            .align_y(iced::alignment::Vertical::Center),
-                    )
-                    .width(Length::Fixed(PLUS_WIDTH))
-                    .height(Length::Fixed(key_size))
-                    .align_x(iced::alignment::Horizontal::Center)
-                    .align_y(iced::alignment::Vertical::Center)
-                    .into(),
-                );
-            }
-            // Key box: key_size square, no border, centered content (text or icon + emblem if pressed)
-            row_children.push(
-                widget::container(key_content_with_emblem(
-                    key,
-                    text_color,
-                    key_size,
-                    keystroke.pressed,
-                    icon_style,
-                    theme,
-                ))
-                .width(Length::Fixed(key_size))
+    // Each key is a key_size square; combinations put a "+" between them
+    let mut parts: Vec<Element<'a, M>> = Vec::new();
+    for (i, key) in keystroke.keys.iter().enumerate() {
+        if i > 0 {
+            // Add "+" separator (fixed width, centered)
+            parts.push(
+                widget::container(
+                    text::Text::new("+")
+                        .size(plus_font_size)
+                        .class(cosmic::theme::Text::Color(plus_color))
+                        .align_x(iced::alignment::Horizontal::Center)
+                        .align_y(iced::alignment::Vertical::Center),
+                )
+                .width(Length::Fixed(PLUS_WIDTH))
                 .height(Length::Fixed(key_size))
                 .align_x(iced::alignment::Horizontal::Center)
                 .align_y(iced::alignment::Vertical::Center)
                 .into(),
             );
         }
+        // Centered content: text or icon, plus the emblem if pressed
+        parts.push(
+            widget::container(key_content_with_emblem(
+                key,
+                text_color,
+                key_size,
+                keystroke.pressed,
+                icon_style,
+                theme,
+            ))
+            .width(Length::Fixed(key_size))
+            .height(Length::Fixed(key_size))
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center)
+            .into(),
+        );
+    }
 
-        // Outer container with border, no padding, no spacing (children handle their own size)
-        let combo_widget = widget::container(
-            widget::row::with_children(row_children)
-                .spacing(0)
-                .align_y(iced::Alignment::Center),
-        )
-        .height(Length::Fixed(key_size))
-        .align_x(iced::alignment::Horizontal::Center)
-        .align_y(iced::alignment::Vertical::Center)
-        .class(cosmic::theme::Container::custom(move |_| {
-            container::Style {
-                background: Some(background),
-                border,
-                ..Default::default()
-            }
-        }));
+    if style.repeats == Repeats::Inline && keystroke.count > 1 {
+        parts.push(
+            widget::container(
+                text::Text::new(format!("×{}", keystroke.count))
+                    .size(key_size * 0.3)
+                    .class(cosmic::theme::Text::Color(plus_color)),
+            )
+            .height(Length::Fixed(key_size))
+            .padding([0.0, key_size * 0.15, 0.0, 0.0])
+            .align_y(iced::alignment::Vertical::Center)
+            .into(),
+        );
+    }
 
-        // Wrap with badge area (always reserve space for badge to prevent relayout)
-        wrap_with_badge_area(
-            combo_widget.into(),
+    let key_widget: Element<'a, M> = widget::container(
+        widget::row::with_children(parts)
+            .spacing(0)
+            .align_y(iced::Alignment::Center),
+    )
+    .height(Length::Fixed(key_size))
+    .class(cosmic::theme::Container::custom(move |_| {
+        container::Style {
+            background: Some(background),
+            border,
+            ..Default::default()
+        }
+    }))
+    .into();
+
+    match style.repeats {
+        // Always reserve space for the badge to prevent relayout
+        Repeats::Badge => wrap_with_badge_area(
+            key_widget,
             keystroke.count,
             key_size,
-            count_color,
-            count_bg,
+            fade(style.badge_text.0),
+            fade(style.badge_background.0),
             position,
-        )
-    } else {
-        // Single key: square with border
-        let key_widget = widget::container(key_content_with_emblem(
-            &keystroke.keys[0],
-            text_color,
-            key_size,
-            keystroke.pressed,
-            icon_style,
-            theme,
-        ))
-        .width(Length::Fixed(key_size))
-        .height(Length::Fixed(key_size))
-        .align_x(iced::alignment::Horizontal::Center)
-        .align_y(iced::alignment::Vertical::Center)
-        .class(cosmic::theme::Container::custom(move |_| {
-            container::Style {
-                background: Some(background),
-                border,
-                ..Default::default()
-            }
-        }));
-
-        // Wrap with badge area (always reserve space for badge to prevent relayout)
-        wrap_with_badge_area(
-            key_widget.into(),
-            keystroke.count,
-            key_size,
-            count_color,
-            count_bg,
-            position,
-        )
+        ),
+        Repeats::Inline | Repeats::Hidden => key_widget,
     }
 }
+
+/// A theme fill as a widget background, with its alpha scaled by `opacity`
+fn fill_background(fill: Fill, opacity: f32) -> Background {
+    let fade = |color: Color| Color {
+        a: color.a * opacity,
+        ..color
+    };
+    match fill {
+        Fill::Solid(color) => Background::Color(fade(color.0)),
+        Fill::Gradient(start, end) => {
+            let grad = gradient::Linear::new(std::f32::consts::PI / 4.0) // 45 degree angle
+                .add_stop(0.0, fade(start.0))
+                .add_stop(1.0, fade(end.0));
+            Background::Gradient(gradient::Gradient::Linear(grad))
+        }
+    }
+}
+
 /// Renders a row of keystrokes.
 /// Filters out expired keystrokes and limits to history_count keystrokes.
 pub fn keystrokes_row<'a, M: 'a + Clone>(
@@ -732,6 +724,12 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
 
     // Reverse so oldest is first (left side for left-aligned, right side for right-aligned)
     visible_keystrokes.reverse();
+
+    // The rail fades out along with its newest key
+    let rail_opacity = visible_keystrokes
+        .iter()
+        .map(|k| k.opacity(fade_duration))
+        .fold(0.0, f32::max);
 
     let children: Vec<Element<'a, M>> = visible_keystrokes
         .into_iter()
@@ -768,14 +766,69 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         children.into_iter().rev().collect()
     };
 
-    widget::row::with_children(ordered_children)
-        .spacing(theme.key.gap)
-        .align_y(if is_bottom {
-            iced::Alignment::End
-        } else {
-            iced::Alignment::Start
-        })
-        .into()
+    let Some(rail) = theme.rail else {
+        return widget::row::with_children(ordered_children)
+            .spacing(theme.key.gap)
+            .align_y(if is_bottom {
+                iced::Alignment::End
+            } else {
+                iced::Alignment::Start
+            })
+            .into();
+    };
+
+    let fade = |color: Color| Color {
+        a: color.a * rail_opacity,
+        ..color
+    };
+
+    // Thin lines between keys
+    let children: Vec<Element<'a, M>> = match rail.divider {
+        None => ordered_children,
+        Some(color) => {
+            let color = fade(color.0);
+            let mut with_dividers = Vec::new();
+            for (i, child) in ordered_children.into_iter().enumerate() {
+                if i > 0 {
+                    with_dividers.push(
+                        widget::container(widget::Space::new())
+                            .width(Length::Fixed(1.0))
+                            .height(Length::Fixed(key_size))
+                            .class(cosmic::theme::Container::custom(move |_| {
+                                container::Style {
+                                    background: Some(Background::Color(color)),
+                                    ..Default::default()
+                                }
+                            }))
+                            .into(),
+                    );
+                }
+                with_dividers.push(child);
+            }
+            with_dividers
+        }
+    };
+
+    let background = fill_background(rail.background, rail_opacity);
+    let border = Border {
+        color: fade(rail.border.color.0),
+        width: rail.border.width,
+        radius: rail.radius.into(),
+    };
+    widget::container(
+        widget::row::with_children(children)
+            .spacing(theme.key.gap)
+            .align_y(iced::Alignment::Center),
+    )
+    .padding(rail.padding)
+    .class(cosmic::theme::Container::custom(move |_| {
+        container::Style {
+            background: Some(background),
+            border,
+            ..Default::default()
+        }
+    }))
+    .into()
 }
 
 #[cfg(test)]

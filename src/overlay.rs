@@ -207,7 +207,7 @@ impl Default for SharedState {
             enabled: true,
             key_size: 64.0,
             fade_duration: 5.0,
-            theme_choice: ThemeChoice::Builtin(crate::config::PaletteType::Frosted),
+            theme_choice: ThemeChoice::Builtin(crate::config::BuiltinTheme::Frosted),
             theme: Arc::new(Theme::default()),
             position: OverlayPosition::TopRight,
             key_display_mode: crate::config::KeyDisplayMode::default(),

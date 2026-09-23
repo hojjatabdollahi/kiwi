@@ -10,7 +10,7 @@ use cosmic::widget::Svg;
 use std::sync::Arc;
 
 use crate::config::{IconStyle, KeyDisplayMode, OverlayPosition, APP_VERSION};
-use crate::keystroke::{keystroke_widget, KeyModifiers, Keystroke};
+use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke};
 use crate::position_selector::PositionSelector;
 use crate::theme::{Theme, ThemeChoice};
 use crate::Message;
@@ -274,7 +274,7 @@ pub fn settings_view(
         .into()
 }
 
-/// A clickable theme card showing "Ctrl + C" drawn with that theme
+/// A clickable theme card showing "V" then "Ctrl + C" drawn with that theme
 fn theme_card(
     choice: &ThemeChoice,
     theme: &Theme,
@@ -285,13 +285,18 @@ fn theme_card(
         ctrl: true,
         ..Default::default()
     };
-    let sample = keystroke_widget::<Message>(
-        &Keystroke::combination(&ctrl, "C", false),
-        30.0,
-        1.0, // fade_duration (unused when fade disabled)
+    let keys = [
+        Keystroke::single("V", false),
+        Keystroke::combination(&ctrl, "C", false),
+    ];
+    // Right-aligned so the order reads left to right, like typing
+    let sample = keystrokes_row::<Message>(
+        &keys,
+        26.0,
+        60.0, // long enough that the sample never fades
         theme,
-        false,
-        OverlayPosition::TopLeft,
+        OverlayPosition::TopRight,
+        keys.len(),
         icon_style,
     );
 

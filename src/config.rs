@@ -9,14 +9,16 @@ pub const APP_ID: &str = "io.github.hojjatabdollahi.kiwi";
 /// Version pulled from Cargo.toml at compile time
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Color palette preset for keystroke visualization
+/// Themes that ship with Kiwi (see `theme::Theme::builtin`)
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum PaletteType {
+pub enum BuiltinTheme {
     #[default]
     Dark,
     Light,
     Frosted,
     Kiwi,
+    Ribbon,
+    Tape,
 }
 
 /// Position of the overlay on screen
@@ -100,20 +102,24 @@ impl OverlayPosition {
     }
 }
 
-impl PaletteType {
-    pub const ALL: &'static [PaletteType] = &[
-        PaletteType::Dark,
-        PaletteType::Light,
-        PaletteType::Frosted,
-        PaletteType::Kiwi,
+impl BuiltinTheme {
+    pub const ALL: &'static [BuiltinTheme] = &[
+        BuiltinTheme::Dark,
+        BuiltinTheme::Light,
+        BuiltinTheme::Frosted,
+        BuiltinTheme::Kiwi,
+        BuiltinTheme::Ribbon,
+        BuiltinTheme::Tape,
     ];
 
     pub fn name(&self) -> &'static str {
         match self {
-            PaletteType::Dark => "Dark",
-            PaletteType::Light => "Light",
-            PaletteType::Frosted => "Frosted",
-            PaletteType::Kiwi => "Kiwi",
+            BuiltinTheme::Dark => "Dark",
+            BuiltinTheme::Light => "Light",
+            BuiltinTheme::Frosted => "Frosted",
+            BuiltinTheme::Kiwi => "Kiwi",
+            BuiltinTheme::Ribbon => "Ribbon",
+            BuiltinTheme::Tape => "Tape",
         }
     }
 }
@@ -129,7 +135,7 @@ pub struct Config {
     /// How long keystrokes stay visible (in seconds)
     pub fade_duration: f32,
     /// Built-in theme, used when `user_theme` is not set
-    pub palette: PaletteType,
+    pub palette: BuiltinTheme,
     /// Folder name of the user theme in use (see `theme::themes_dir`)
     pub user_theme: Option<String>,
     /// Position of the overlay on screen
@@ -156,7 +162,7 @@ impl Default for Config {
             enabled: true,
             key_size: 64.0,
             fade_duration: 5.0,
-            palette: PaletteType::Frosted,
+            palette: BuiltinTheme::Frosted,
             user_theme: None,
             position: OverlayPosition::TopRight,
             key_display_mode: KeyDisplayMode::TypedCharacter,
