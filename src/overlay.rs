@@ -71,6 +71,8 @@ pub struct SharedState {
     pub arranging: bool,
     /// A theme preview playing on the overlay
     pub preview: Option<Preview>,
+    /// How far the keys have been dragged from their spot, while arranging
+    pub drag_offset: Option<cosmic::iced::Vector>,
     /// Key display mode (typed character vs physical key)
     pub key_display_mode: crate::config::KeyDisplayMode,
     /// Icon style (symbols vs text)
@@ -195,6 +197,7 @@ impl Default for SharedState {
             line_width: None,
             arranging: false,
             preview: None,
+            drag_offset: None,
             key_display_mode: crate::config::KeyDisplayMode::default(),
             icon_style: IconStyle::default(),
             history_count: 5,
@@ -370,6 +373,7 @@ struct Snapshot {
     icon_style: IconStyle,
     touches: Vec<TouchPoint>,
     arranging: bool,
+    drag_offset: cosmic::iced::Vector,
 }
 
 impl Snapshot {
@@ -404,6 +408,7 @@ impl Snapshot {
             icon_style: s.icon_style,
             touches,
             arranging: s.arranging,
+            drag_offset: s.drag_offset.unwrap_or_default(),
         }
     }
 }
@@ -559,13 +564,38 @@ pub fn view_overlay(
         )
     };
 
-    // Full-screen container with proper alignment
+    let content = if frame.arranging {
+        arranging_keys(content, v_align, h_align)
+    } else {
+        content
+    };
+
+    // Full-screen container with proper alignment. While dragging, the padding
+    // on the aligned side follows the pointer so the keys move with it.
+    let margin = frame.margin;
+    let offset = frame.drag_offset;
+    let (left, right) = match h_align {
+        Horizontal::Left => (margin + offset.x, margin),
+        Horizontal::Right => (margin, margin - offset.x),
+        // Centered content moves by half the extra padding on one side
+        _ if offset.x >= 0.0 => (margin + 2.0 * offset.x, margin),
+        _ => (margin, margin - 2.0 * offset.x),
+    };
+    let (top, bottom) = match v_align {
+        Vertical::Top => (margin + offset.y, margin),
+        _ => (margin, margin - offset.y),
+    };
     let keystroke_layer: cosmic::Element<'static, Message> = cosmic::widget::container(content)
         .width(cosmic::iced::Length::Fill)
         .height(cosmic::iced::Length::Fill)
         .align_x(h_align)
         .align_y(v_align)
-        .padding(frame.margin)
+        .padding(cosmic::iced::Padding {
+            top: top.max(0.0),
+            right: right.max(0.0),
+            bottom: bottom.max(0.0),
+            left: left.max(0.0),
+        })
         .into();
 
     if frame.arranging {
@@ -682,13 +712,19 @@ impl ArrangeCanvas {
     }
 }
 
+/// A press on a spot, which a release completes as a click or a drag
+#[derive(Debug, Default)]
+struct Press {
+    spot: Option<OverlayPosition>,
+    origin: cosmic::iced::Point,
+}
+
 impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for ArrangeCanvas {
-    /// Whether a press started on a spot, so the release can complete a drag
-    type State = bool;
+    type State = Press;
 
     fn update(
         &self,
-        pressed: &mut bool,
+        press: &mut Press,
         event: &cosmic::iced::Event,
         bounds: cosmic::iced::Rectangle,
         cursor: cosmic::iced::mouse::Cursor,
@@ -697,16 +733,29 @@ impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for ArrangeCanvas {
         use cosmic::widget::canvas::Action;
         match event {
             cosmic::iced::Event::Mouse(Mouse::ButtonPressed(Button::Left)) => {
-                self.spot_at(bounds, cursor)?;
-                *pressed = true;
+                press.spot = Some(self.spot_at(bounds, cursor)?);
+                press.origin = cursor.position()?;
                 Some(Action::capture())
             }
-            cosmic::iced::Event::Mouse(Mouse::ButtonReleased(Button::Left)) if *pressed => {
-                *pressed = false;
-                let spot = self.spot_at(bounds, cursor)?;
-                Some(Action::publish(Message::SetPosition(spot)).and_capture())
+            cosmic::iced::Event::Mouse(Mouse::ButtonReleased(Button::Left)) => {
+                press.spot.take()?;
+                Some(
+                    Action::publish(match self.spot_at(bounds, cursor) {
+                        Some(spot) => Message::SetPosition(spot),
+                        // Dropped between spots: the keys go back where they were
+                        None => Message::ArrangeDrag(None),
+                    })
+                    .and_capture(),
+                )
             }
-            // Redraw so the spot under the pointer lights up
+            // Dragging the keys from their own spot moves them with the pointer
+            cosmic::iced::Event::Mouse(Mouse::CursorMoved { position })
+                if press.spot == Some(self.position) =>
+            {
+                let offset = *position - press.origin;
+                Some(Action::publish(Message::ArrangeDrag(Some(offset))).and_capture())
+            }
+            // Otherwise just redraw so the spot under the pointer lights up
             cosmic::iced::Event::Mouse(Mouse::CursorMoved { .. }) => Some(Action::request_redraw()),
             _ => None,
         }
@@ -714,7 +763,7 @@ impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for ArrangeCanvas {
 
     fn draw(
         &self,
-        pressed: &bool,
+        press: &Press,
         renderer: &cosmic::Renderer,
         theme: &cosmic::Theme,
         bounds: cosmic::iced::Rectangle,
@@ -744,7 +793,7 @@ impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for ArrangeCanvas {
                 frame.fill(&path, with_opacity(accent, 0.15));
                 frame.stroke(&path, Stroke::default().with_color(accent).with_width(2.0));
             } else if hovered == Some(position) {
-                let highlight = if *pressed { 0.2 } else { 0.08 };
+                let highlight = if press.spot.is_some() { 0.2 } else { 0.08 };
                 frame.fill(&path, with_opacity(Color::WHITE, highlight));
                 frame.stroke(
                     &path,
@@ -765,40 +814,122 @@ impl cosmic::widget::canvas::Program<Message, cosmic::Theme> for ArrangeCanvas {
                 );
             }
         }
+
+        // A dashed guide from the keys' spot to the nearest screen edge, with the distance
+        let spot = spot_bounds(self.position, local, self.margin, self.key_size);
+        let (from, to, label_at) = match self.position {
+            OverlayPosition::TopLeft | OverlayPosition::BottomLeft => {
+                let y = spot.center_y();
+                ((0.0, y), (spot.x, y), (4.0, y + 6.0))
+            }
+            OverlayPosition::TopRight | OverlayPosition::BottomRight => {
+                let y = spot.center_y();
+                let right = spot.x + spot.width;
+                ((right, y), (local.width, y), (right + 4.0, y + 6.0))
+            }
+            OverlayPosition::TopCenter => {
+                let x = spot.center_x();
+                ((x, 0.0), (x, spot.y), (x + 6.0, 2.0))
+            }
+            OverlayPosition::BottomCenter => {
+                let x = spot.center_x();
+                let bottom = spot.y + spot.height;
+                ((x, bottom), (x, local.height), (x + 6.0, bottom + 2.0))
+            }
+        };
+        let kiwi = Color::from_rgb8(0xd9, 0xfb, 0x69);
+        if self.margin > 0.0 {
+            frame.stroke(
+                &Path::line(from.into(), to.into()),
+                Stroke {
+                    line_dash: LineDash {
+                        segments: &[4.0, 3.0],
+                        offset: 0,
+                    },
+                    ..Stroke::default().with_color(kiwi).with_width(1.5)
+                },
+            );
+        }
+        frame.fill_text(cosmic::widget::canvas::Text {
+            content: format!("{:.0} px from edge", self.margin),
+            position: label_at.into(),
+            color: kiwi,
+            size: 13.0.into(),
+            ..Default::default()
+        });
         vec![frame.into_geometry()]
     }
 
     fn mouse_interaction(
         &self,
-        pressed: &bool,
+        press: &Press,
         bounds: cosmic::iced::Rectangle,
         cursor: cosmic::iced::mouse::Cursor,
     ) -> cosmic::iced::mouse::Interaction {
         use cosmic::iced::mouse::Interaction;
         match self.spot_at(bounds, cursor) {
-            Some(_) if *pressed => Interaction::Grabbing,
+            Some(_) if press.spot.is_some() => Interaction::Grabbing,
+            Some(spot) if spot == self.position => Interaction::Grab,
             Some(_) => Interaction::Pointer,
             None => Interaction::default(),
         }
     }
 }
 
-/// The arrange mode toolbar: size, distance from the edge, line length, and finishing
-fn arrange_toolbar(frame: &Snapshot) -> cosmic::Element<'static, Message> {
+/// The keys while arranging: outlined in the accent color, with a hint to drag them
+fn arranging_keys(
+    content: cosmic::Element<'static, Message>,
+    v_align: cosmic::iced::alignment::Vertical,
+    h_align: cosmic::iced::alignment::Horizontal,
+) -> cosmic::Element<'static, Message> {
     use cosmic::widget;
 
-    let stepper = |label: String, less: Message, more: Message| {
-        widget::Row::new()
-            .spacing(4)
-            .align_y(cosmic::iced::Alignment::Center)
-            .push(widget::button::standard("−").on_press(less))
-            .push(
-                widget::text::body(label)
-                    .width(cosmic::iced::Length::Fixed(96.0))
-                    .align_x(cosmic::iced::alignment::Horizontal::Center),
-            )
-            .push(widget::button::standard("+").on_press(more))
-    };
+    let outlined = widget::container(content)
+        .padding(6)
+        .class(cosmic::theme::Container::custom(|theme| {
+            widget::container::Style {
+                border: cosmic::iced::Border {
+                    color: cosmic::iced::Color::from(theme.cosmic().accent_color()),
+                    width: 2.0,
+                    radius: 10.0.into(),
+                },
+                ..Default::default()
+            }
+        }));
+    let hint = widget::container(widget::text::caption("Drag to move").class(
+        cosmic::theme::Text::Color(cosmic::iced::Color::from_rgb8(0x1b, 0x24, 0x10)),
+    ))
+    .padding([3, 10])
+    .class(cosmic::theme::Container::custom(|_| {
+        widget::container::Style {
+            background: Some(cosmic::iced::Color::from_rgb8(0xd9, 0xfb, 0x69).into()),
+            border: cosmic::iced::Border {
+                radius: 10.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }));
+
+    // The hint goes on the side facing the middle of the screen
+    let column = widget::Column::new().spacing(8).align_x(match h_align {
+        cosmic::iced::alignment::Horizontal::Left => cosmic::iced::Alignment::Start,
+        cosmic::iced::alignment::Horizontal::Right => cosmic::iced::Alignment::End,
+        _ => cosmic::iced::Alignment::Center,
+    });
+    match v_align {
+        cosmic::iced::alignment::Vertical::Top => column.push(outlined).push(hint),
+        _ => column.push(hint).push(outlined),
+    }
+    .into()
+}
+
+/// The arrange toolbar: a compact pill with size, length and edge distance,
+/// Reset and Done, with the ways out written underneath
+fn arrange_toolbar(frame: &Snapshot) -> cosmic::Element<'static, Message> {
+    use crate::widgets::stepper;
+    use cosmic::widget;
+
     let length = match frame.theme.layout {
         Layout::Keys => format!("{} keys", frame.history_count),
         Layout::Text => format!(
@@ -806,53 +937,74 @@ fn arrange_toolbar(frame: &Snapshot) -> cosmic::Element<'static, Message> {
             frame.line_width.unwrap_or(frame.theme.line_width)
         ),
     };
+    let divider = || {
+        widget::container(widget::Space::new())
+            .width(cosmic::iced::Length::Fixed(1.0))
+            .height(cosmic::iced::Length::Fixed(20.0))
+            .class(cosmic::theme::Container::custom(|theme| {
+                widget::container::Style {
+                    background: Some(cosmic::iced::Color::from(theme.cosmic().bg_divider()).into()),
+                    ..Default::default()
+                }
+            }))
+    };
 
-    let buttons = widget::Row::new()
-        .spacing(16)
-        .align_y(cosmic::iced::Alignment::Center)
-        .push(stepper(
-            format!("Size {:.0}", frame.key_size),
-            Message::NudgeSize(-4.0),
-            Message::NudgeSize(4.0),
-        ))
-        .push(stepper(
-            format!("{:.0} px from edge", frame.margin),
-            Message::NudgeMargin(-4.0),
-            Message::NudgeMargin(4.0),
-        ))
-        .push(stepper(
-            length,
-            Message::NudgeLength(-1),
-            Message::NudgeLength(1),
-        ))
-        .push(widget::button::standard("Reset").on_press(Message::ResetArrangement))
-        .push(widget::button::standard("Cancel").on_press(Message::CancelArranging))
-        .push(widget::button::suggested("Done").on_press(Message::FinishArranging));
-
-    widget::container(
-        widget::Column::new()
-            .spacing(10)
-            .align_x(cosmic::iced::Alignment::Center)
-            .push(buttons)
-            .push(widget::text::caption(
-                "Click a spot, or drag from one spot to another, to move the keys. \
-                 Esc cancels. Arranging ends by itself after a minute without input.",
-            )),
+    let pill = widget::container(
+        widget::Row::new()
+            .spacing(8)
+            .align_y(cosmic::iced::Alignment::Center)
+            .push(stepper(
+                format!("{:.0} px", frame.key_size),
+                64.0,
+                (frame.key_size > 32.0).then_some(Message::NudgeSize(-4.0)),
+                (frame.key_size < 160.0).then_some(Message::NudgeSize(4.0)),
+            ))
+            .push(stepper(
+                length,
+                96.0,
+                Some(Message::NudgeLength(-1)),
+                Some(Message::NudgeLength(1)),
+            ))
+            .push(stepper(
+                format!("{:.0} px from edge", frame.margin),
+                120.0,
+                (frame.margin > 0.0).then_some(Message::NudgeMargin(-4.0)),
+                Some(Message::NudgeMargin(4.0)),
+            ))
+            .push(divider())
+            .push(widget::button::standard("Reset").on_press(Message::ResetArrangement))
+            .push(widget::button::suggested("Done").on_press(Message::FinishArranging)),
     )
-    .padding(16)
+    .padding(8)
     .class(cosmic::theme::Container::custom(|theme| {
         let cosmic = theme.cosmic();
-        cosmic::widget::container::Style {
+        widget::container::Style {
             background: Some(cosmic::iced::Color::from(cosmic.bg_color()).into()),
             text_color: Some(cosmic::iced::Color::from(cosmic.on_bg_color())),
             border: cosmic::iced::Border {
-                radius: cosmic.radius_m().into(),
+                radius: cosmic.radius_xl().into(),
                 ..Default::default()
+            },
+            shadow: cosmic::iced::Shadow {
+                color: cosmic::iced::Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+                offset: cosmic::iced::Vector::new(0.0, 8.0),
+                blur_radius: 24.0,
             },
             ..Default::default()
         }
-    }))
-    .into()
+    }));
+
+    widget::Column::new()
+        .spacing(10)
+        .align_x(cosmic::iced::Alignment::Center)
+        .push(pill)
+        .push(
+            widget::text::caption("Esc cancels. Leaves on its own after a minute without input.")
+                .class(cosmic::theme::Text::Color(cosmic::iced::Color::from_rgba(
+                    1.0, 1.0, 1.0, 0.85,
+                ))),
+        )
+        .into()
 }
 
 #[cfg(test)]

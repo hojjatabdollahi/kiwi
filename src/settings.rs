@@ -12,7 +12,7 @@ use crate::{KiwiApp, Message};
 
 // Checkerboard pattern SVG for transparency preview
 // (wide, with small squares, so it can cover a card without the squares growing)
-const CHECKERBOARD_SVG: &[u8] =
+pub(crate) const CHECKERBOARD_SVG: &[u8] =
     b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"320\" height=\"80\">\
   <defs><pattern id=\"c\" width=\"16\" height=\"16\" patternUnits=\"userSpaceOnUse\">\
   <rect width=\"16\" height=\"16\" fill=\"rgb(204,204,204)\"/>\

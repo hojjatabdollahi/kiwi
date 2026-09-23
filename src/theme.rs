@@ -174,6 +174,8 @@ pub struct Theme {
     pub line_width: f32,
     pub key: KeyStyle,
     pub rail: Option<RailStyle>,
+    /// Font family for key labels and typed text; `None` is Kiwi's own (Gemunu Libre)
+    pub font: Option<String>,
     /// Tint single-color icons with the key text color. Turn off for full-color icons.
     pub recolor_icons: bool,
     /// Icons from the theme's `icons/` folder, by file name without `.svg`
@@ -254,6 +256,7 @@ impl Theme {
             line_width: 460.0,
             key,
             rail,
+            font: None,
             recolor_icons: true,
             icons: HashMap::new(),
         }
@@ -367,6 +370,19 @@ impl Theme {
             .expect("a theme always serializes")
     }
 
+    /// The bold font key labels and typed text are drawn in
+    pub fn font(&self) -> cosmic::iced::Font {
+        let family = self
+            .font
+            .as_deref()
+            .map_or(crate::keystroke::FONT_NAME, intern);
+        cosmic::iced::Font {
+            family: cosmic::iced::font::Family::Name(family),
+            weight: cosmic::iced::font::Weight::Bold,
+            ..Default::default()
+        }
+    }
+
     /// The theme's own icon for `key`, if its icon folder has one
     pub fn icon(&self, key: &str) -> Option<&svg::Handle> {
         self.icons.get(icon_file_stem(key))
@@ -401,6 +417,38 @@ fn svg_stem(path: &Path) -> Option<&str> {
         return None;
     }
     path.file_stem()?.to_str()
+}
+
+/// A `'static` copy of a font family name, which is what iced wants. Each name is
+/// kept once, so this only grows by the number of different fonts picked.
+fn intern(name: &str) -> &'static str {
+    static NAMES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = names.iter().find(|known| **known == name) {
+        return known;
+    }
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.push(leaked);
+    leaked
+}
+
+/// The font families installed on the system, sorted, read once
+pub fn font_families() -> &'static [String] {
+    static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    FAMILIES.get_or_init(|| {
+        let mut font_system = cosmic::iced::advanced::graphics::text::font_system()
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut families: Vec<String> = font_system
+            .raw()
+            .db()
+            .faces()
+            .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            .collect();
+        families.sort_by_key(|name| name.to_lowercase());
+        families.dedup();
+        families
+    })
 }
 
 /// The SVG files in a folder, sorted (none if it can't be read)
@@ -840,6 +888,22 @@ mod tests {
         write_zip(&broken, &[("icons/Tab.svg", SVG)]);
         assert!(import(&broken, &themes).is_err());
         assert!(!themes.join("broken").exists());
+    }
+
+    #[test]
+    fn font_falls_back_to_kiwis() {
+        use cosmic::iced::font::Family;
+        let family = |theme: &Theme| match theme.font().family {
+            Family::Name(name) => name,
+            other => panic!("{other:?}"),
+        };
+        let mut theme = Theme::default();
+        assert_eq!(family(&theme), crate::keystroke::FONT_NAME);
+        theme.font = Some("Fira Sans".into());
+        let first = family(&theme);
+        assert_eq!(first, "Fira Sans");
+        // The same name is reused, not stored again
+        assert!(std::ptr::eq(first, family(&theme)));
     }
 
     #[test]

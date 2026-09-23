@@ -11,6 +11,7 @@ mod overlay;
 mod settings;
 mod theme;
 mod tray;
+mod widgets;
 
 use std::any::TypeId;
 use std::hash::{Hash, Hasher};
@@ -143,6 +144,8 @@ pub enum Message {
     IconStyleTab(widget::segmented_button::Entity),
     // Arrange mode
     StartArranging,
+    /// The keys being dragged by this much while arranging (`None` when let go)
+    ArrangeDrag(Option<cosmic::iced::Vector>),
     FinishArranging,
     CancelArranging,
     ResetArrangement,
@@ -300,7 +303,8 @@ impl cosmic::Application for KiwiApp {
             ),
             ContextPage::Customize => {
                 let draft = self.draft.as_ref()?;
-                let (content, footer) = customize::view(draft, self.theme_message.as_deref());
+                let (content, footer) =
+                    customize::view(draft, self.theme_message.as_deref(), self.config.icon_style);
                 cosmic::app::context_drawer::context_drawer(
                     content,
                     Message::ToggleContextPage(ContextPage::Customize),
@@ -593,7 +597,18 @@ impl cosmic::Application for KiwiApp {
             Message::Customize(message) => return self.update_customize(message),
             Message::SetPosition(position) => {
                 self.config.position = position;
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.drag_offset = None;
+                }
                 self.apply_arrangement();
+            }
+            Message::ArrangeDrag(offset) => {
+                if let Some(arranging) = &mut self.arranging {
+                    arranging.last_input = std::time::Instant::now();
+                }
+                if let Ok(mut state) = self.shared_state.lock() {
+                    state.drag_offset = offset;
+                }
             }
             Message::StartArranging => {
                 if self.arranging.is_none() {

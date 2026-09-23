@@ -7,15 +7,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use cosmic::iced::{Alignment, Length};
-use cosmic::widget::{self, settings};
+use cosmic::iced::{Alignment, Color, Length};
+use cosmic::widget::{self, segmented_button, settings, svg, Svg};
 use cosmic::{Element, Task};
 
-use crate::color_picker::{color_picker, swatch, Hsva};
-use crate::keystroke::ICON_KEYS;
+use crate::color_picker::{color_picker, Hsva};
+use crate::config::{IconStyle, OverlayPosition};
+use crate::keystroke::{keystrokes_row, KeyModifiers, Keystroke, ICON_KEYS};
+use crate::settings::{segmented_model, select_segment, CHECKERBOARD_SVG};
 use crate::theme::{
     self, icon_file_stem, Fill, Hex, Layout, RailStyle, Repeats, Theme, ThemeChoice,
 };
+use crate::widgets::{color_chip, stepper};
 use crate::{KiwiApp, Message};
 
 /// A color (or background) the drawer edits as hex text
@@ -156,7 +159,7 @@ impl NumberField {
 #[derive(Debug, Clone)]
 pub enum CustomizeMessage {
     Open,
-    SetLayout(Layout),
+    LayoutTab(segmented_button::Entity),
     SetDefaultSize(f32),
     SetRail(bool),
     /// Open the picker for one color of a field, or close it if it's already open
@@ -165,19 +168,44 @@ pub enum CustomizeMessage {
     PickerHex(String),
     PickerDone,
     PickerCancel,
-    /// Switch a background between one color and a gradient
+    /// Switch a background or border between one color and a gradient
     ToggleGradient(ColorField),
     /// Remove an optional color (the divider)
     ClearColor(ColorField),
     Nudge(NumberField, f32),
-    SetRepeats(Repeats),
+    RepeatsTab(segmented_button::Entity),
+    /// Pick a font from `font_options` (0 is Kiwi's own)
+    SetFont(usize),
     SetRecolorIcons(bool),
     ChooseIcons,
     IconsChosen(PathBuf),
     ToggleMissingIcons,
+    /// Show the name field for saving as a new theme, or hide it again
+    StartNaming,
+    StopNaming,
     SetSaveName(String),
+    /// Save under the name in the name field
     Save,
+    /// Save over the user theme the edits started from
+    SaveInPlace,
     Discard,
+}
+
+const LAYOUTS: &[(&str, Layout)] = &[("Each key", Layout::Keys), ("Typed text", Layout::Text)];
+const REPEATS: &[(&str, Repeats)] = &[
+    ("Badge", Repeats::Badge),
+    ("Inline", Repeats::Inline),
+    ("Hide", Repeats::Hidden),
+];
+
+/// The font dropdown's choices: Kiwi's own font, then every installed family
+fn font_options() -> &'static [String] {
+    static OPTIONS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    OPTIONS.get_or_init(|| {
+        std::iter::once("Kiwi (Gemunu Libre)".to_string())
+            .chain(theme::font_families().iter().cloned())
+            .collect()
+    })
 }
 
 /// The theme being edited
@@ -194,7 +222,11 @@ pub struct Draft {
     /// The rail's settings while it's switched off, to bring them back
     rail_backup: RailStyle,
     save_name: String,
+    /// Whether the footer is asking for a name to save under
+    naming: bool,
     show_missing_icons: bool,
+    layout_model: segmented_button::SingleSelectModel,
+    repeats_model: segmented_button::SingleSelectModel,
 }
 
 impl Draft {
@@ -206,6 +238,9 @@ impl Draft {
         Self {
             icons_dir: base.icons_dir(&theme::themes_dir()),
             rail_backup: theme.rail.unwrap_or_default(),
+            layout_model: segmented_model(LAYOUTS, theme.layout),
+            repeats_model: segmented_model(REPEATS, theme.key.repeats),
+            naming: false,
             base,
             theme,
             edited: false,
@@ -285,7 +320,11 @@ impl KiwiApp {
         match message {
             // Handled above
             M::Open => return Task::none(),
-            M::SetLayout(layout) => {
+            M::LayoutTab(entity) => {
+                draft.layout_model.activate(entity);
+                let Some(&layout) = draft.layout_model.data::<Layout>(entity) else {
+                    return Task::none();
+                };
                 draft.theme.layout = layout;
                 // The typewriter line needs a rail to sit on
                 if layout == Layout::Text && draft.theme.rail.is_none() {
@@ -308,6 +347,7 @@ impl KiwiApp {
                 draft.theme.rail = on.then_some(draft.rail_backup);
                 if !on && draft.theme.layout == Layout::Text {
                     draft.theme.layout = Layout::Keys;
+                    select_segment(&mut draft.layout_model, Layout::Keys);
                 }
                 draft.picking = None;
             }
@@ -373,14 +413,34 @@ impl KiwiApp {
                     None => return Task::none(),
                 };
                 field.set(&mut draft.theme, Some(fill));
-                draft.picking = None;
+                // Keep the picker open; after switching to one color it edits that color
+                if let Some(picking) = draft.picking.as_mut().filter(|p| p.field == field) {
+                    if matches!(fill, Fill::Solid(_)) && picking.stop == 1 {
+                        let color = field.stop(&draft.theme, 0).unwrap_or(NEW_DIVIDER);
+                        picking.stop = 0;
+                        picking.hsva = Hsva::from_color(color.0);
+                        picking.hex = color.to_text();
+                    }
+                }
             }
             M::ClearColor(field) => {
                 field.set(&mut draft.theme, None);
                 draft.picking = None;
             }
             M::Nudge(field, delta) => field.nudge(&mut draft.theme, delta),
-            M::SetRepeats(repeats) => draft.theme.key.repeats = repeats,
+            M::RepeatsTab(entity) => {
+                draft.repeats_model.activate(entity);
+                let Some(&repeats) = draft.repeats_model.data::<Repeats>(entity) else {
+                    return Task::none();
+                };
+                draft.theme.key.repeats = repeats;
+            }
+            M::SetFont(index) => {
+                draft.theme.font = match index {
+                    0 => None,
+                    i => font_options().get(i).cloned(),
+                };
+            }
             M::SetRecolorIcons(recolor) => draft.theme.recolor_icons = recolor,
             M::ChooseIcons => {
                 use cosmic::dialog::file_chooser::open;
@@ -406,11 +466,18 @@ impl KiwiApp {
                 draft.show_missing_icons = !draft.show_missing_icons;
                 return Task::none();
             }
+            M::StartNaming | M::StopNaming => {
+                draft.naming = matches!(message, M::StartNaming);
+                return Task::none();
+            }
             M::SetSaveName(name) => {
                 draft.save_name = name;
                 return Task::none();
             }
-            M::Save => {
+            M::Save | M::SaveInPlace => {
+                if let (M::SaveInPlace, ThemeChoice::User(name)) = (&message, &draft.base) {
+                    draft.save_name = name.clone();
+                }
                 let text = draft.theme.to_ron();
                 let icons = draft.icons_dir.clone();
                 let result = theme::save(
@@ -468,190 +535,211 @@ impl KiwiApp {
 pub fn view<'a>(
     draft: &'a Draft,
     message: Option<&'a str>,
+    icon_style: IconStyle,
 ) -> (Element<'a, Message>, Element<'a, Message>) {
     let theme = &draft.theme;
     let send = |m: CustomizeMessage| Message::Customize(m);
+    let is_picking = |field: ColorField, stop: usize| {
+        draft
+            .picking
+            .as_ref()
+            .is_some_and(|p| p.field == field && p.stop == stop)
+    };
 
-    // A color row: swatches that open the picker, which then shows under the row
-    let add_color = |section: settings::Section<'a, Message>,
-                     label: &'static str,
-                     field: ColorField| {
-        let mut swatches = widget::Row::new().spacing(6).align_y(Alignment::Center);
+    // One chip per color of the field (two for a gradient), then its extra action
+    let chips = move |field: ColorField| {
         let stops = match field.get(theme) {
             Some(Fill::Gradient(..)) => 2,
             Some(Fill::Solid(_)) => 1,
             None => 0,
         };
+        let mut row = widget::Row::new().spacing(6).align_y(Alignment::Center);
         for stop in 0..stops {
             let color = field.stop(theme, stop).map_or(NEW_DIVIDER.0, |c| c.0);
-            swatches = swatches.push(
-                widget::button::custom(swatch(color))
-                    .padding(2)
-                    .class(cosmic::theme::Button::Image)
-                    .selected(
-                        draft
-                            .picking
-                            .as_ref()
-                            .is_some_and(|p| p.field == field && p.stop == stop),
-                    )
-                    .on_press(send(CustomizeMessage::PickColor(field, stop))),
-            );
+            row = row.push(color_chip(
+                color,
+                is_picking(field, stop),
+                send(CustomizeMessage::PickColor(field, stop)),
+            ));
         }
-        if field.allows_gradient() {
-            let label = if stops == 2 { "Solid" } else { "Gradient" };
-            swatches = swatches.push(
-                widget::button::link(label).on_press(send(CustomizeMessage::ToggleGradient(field))),
-            );
-        } else if field == ColorField::RailDivider {
-            swatches = swatches.push(if stops == 0 {
+        if field == ColorField::RailDivider {
+            row = row.push(if stops == 0 {
                 widget::button::link("Add").on_press(send(CustomizeMessage::PickColor(field, 0)))
             } else {
                 widget::button::link("Remove").on_press(send(CustomizeMessage::ClearColor(field)))
             });
         }
-
-        let section = section.add(settings::item(label, swatches));
-        match &draft.picking {
-            Some(picking) if picking.field == field => section.add(
-                widget::Column::new()
-                    .spacing(8)
-                    .push(color_picker(
-                        picking.hsva,
-                        &picking.hex,
-                        move |hsva| send(CustomizeMessage::PickerChanged(hsva)),
-                        move |hex| send(CustomizeMessage::PickerHex(hex)),
-                    ))
-                    .push(
-                        widget::Row::new()
-                            .spacing(8)
-                            .push(widget::Space::new().width(Length::Fill))
-                            .push(
-                                widget::button::standard("Cancel")
-                                    .on_press(send(CustomizeMessage::PickerCancel)),
-                            )
-                            .push(
-                                widget::button::suggested("Done")
-                                    .on_press(send(CustomizeMessage::PickerDone)),
-                            ),
-                    ),
-            ),
-            _ => section,
-        }
+        row
     };
-    let number = |label: &'static str, field: NumberField| {
+
+    // The picker, when it's open for this field
+    let picker = move |field: ColorField| -> Option<Element<'a, Message>> {
+        let picking = draft.picking.as_ref().filter(|p| p.field == field)?;
+        let gradient = matches!(field.get(theme), Some(Fill::Gradient(..)));
+        let mut panel = widget::Column::new().spacing(8);
+        if field.allows_gradient() {
+            let editing = match (gradient, picking.stop) {
+                (false, _) => "",
+                (true, 0) => "Editing the start color",
+                (true, _) => "Editing the end color",
+            };
+            panel = panel.push(
+                widget::Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(widget::text::caption(editing).width(Length::Fill))
+                    .push(widget::text::body("Gradient"))
+                    .push(
+                        widget::toggler(gradient)
+                            .on_toggle(move |_| send(CustomizeMessage::ToggleGradient(field))),
+                    ),
+            );
+        }
+        Some(
+            panel
+                .push(color_picker(
+                    picking.hsva,
+                    &picking.hex,
+                    move |hsva| send(CustomizeMessage::PickerChanged(hsva)),
+                    move |hex| send(CustomizeMessage::PickerHex(hex)),
+                ))
+                .push(
+                    widget::Row::new()
+                        .spacing(8)
+                        .push(widget::Space::new().width(Length::Fill))
+                        .push(
+                            widget::button::standard("Cancel")
+                                .on_press(send(CustomizeMessage::PickerCancel)),
+                        )
+                        .push(
+                            widget::button::suggested("Done")
+                                .on_press(send(CustomizeMessage::PickerDone)),
+                        ),
+                )
+                .into(),
+        )
+    };
+
+    let number = move |field: NumberField| {
         let step = match field {
             NumberField::KeyBorderWidth | NumberField::RailBorderWidth => 1.0,
             _ => 2.0,
         };
-        settings::item(
-            label,
-            widget::Row::new()
-                .spacing(4)
-                .align_y(Alignment::Center)
-                .push(
-                    widget::button::standard("−")
-                        .on_press(send(CustomizeMessage::Nudge(field, -step))),
-                )
-                .push(
-                    widget::text::body(format!("{:.0}", field.value(theme)))
-                        .width(Length::Fixed(36.0))
-                        .align_x(cosmic::iced::alignment::Horizontal::Center),
-                )
-                .push(
-                    widget::button::standard("+")
-                        .on_press(send(CustomizeMessage::Nudge(field, step))),
-                ),
+        let value = field.value(theme);
+        stepper(
+            format!("{value:.0}"),
+            36.0,
+            (value > 0.0).then(|| send(CustomizeMessage::Nudge(field, -step))),
+            Some(send(CustomizeMessage::Nudge(field, step))),
         )
-    };
-    let choice = |label: &'static str, selected: bool, message: CustomizeMessage| {
-        widget::radio(label, true, Some(selected), move |_| send(message.clone()))
     };
 
-    let banner = widget::text::caption(if draft.edited {
-        format!(
-            "{}: built-in and saved themes stay as they are until you save.",
-            draft.name()
-        )
-    } else {
-        format!(
-            "Editing {}. Changes show on the overlay right away.",
-            draft.name()
-        )
-    });
+    // A color row, with the picker under it while it's open
+    let add_color =
+        move |section: settings::Section<'a, Message>, label: &'static str, field: ColorField| {
+            let section = section.add(settings::item(label, chips(field)));
+            match picker(field) {
+                Some(picker) => section.add(picker),
+                None => section,
+            }
+        };
+    // Border color, then border width on its own row (two gradient chips leave no room)
+    let add_border =
+        move |section: settings::Section<'a, Message>, field: ColorField, width: NumberField| {
+            let section = section.add(settings::item("Border", chips(field)));
+            let section = match picker(field) {
+                Some(picker) => section.add(picker),
+                None => section,
+            };
+            section.add(settings::item("Border width", number(width)))
+        };
 
     let layout = settings::section()
         .title("Layout")
         .add(settings::item(
             "Show",
-            widget::Row::new()
-                .spacing(12)
-                .push(choice(
-                    "Each key",
-                    theme.layout == Layout::Keys,
-                    CustomizeMessage::SetLayout(Layout::Keys),
-                ))
-                .push(choice(
-                    "Typed text",
-                    theme.layout == Layout::Text,
-                    CustomizeMessage::SetLayout(Layout::Text),
-                )),
+            widget::segmented_control::horizontal(&draft.layout_model)
+                .on_activate(move |e| send(CustomizeMessage::LayoutTab(e)))
+                .width(Length::Shrink),
         ))
-        .add(settings::item(
-            format!("Default size: {:.0}", theme.default_size),
-            widget::slider(32.0..=160.0, theme.default_size, move |v| {
-                send(CustomizeMessage::SetDefaultSize(v))
-            })
-            .width(Length::Fixed(150.0)),
-        ));
+        .add(
+            settings::item::builder("Default size")
+                .description("Used until you resize it on screen")
+                .control(
+                    widget::Row::new()
+                        .spacing(12)
+                        .align_y(Alignment::Center)
+                        .push(
+                            widget::slider(32.0..=160.0, theme.default_size, move |v| {
+                                send(CustomizeMessage::SetDefaultSize(v))
+                            })
+                            .width(Length::Fixed(120.0)),
+                        )
+                        .push(
+                            widget::text::body(format!("{:.0} px", theme.default_size))
+                                .width(Length::Fixed(48.0))
+                                .align_x(cosmic::iced::alignment::Horizontal::Right),
+                        ),
+                ),
+        );
 
-    let mut rail = settings::section().title("Rail").add(
-        settings::item::builder("Draw one strip behind the keys")
-            .toggler(theme.rail.is_some(), move |on| {
-                send(CustomizeMessage::SetRail(on))
-            }),
+    // The rail's on/off switch sits in its section header
+    let mut rail = settings::section().header(
+        widget::Row::new()
+            .align_y(Alignment::Center)
+            .push(widget::text::heading("Rail"))
+            .push(widget::Space::new().width(Length::Fill))
+            .push(
+                widget::toggler(theme.rail.is_some())
+                    .on_toggle(move |on| send(CustomizeMessage::SetRail(on))),
+            ),
     );
     if theme.rail.is_some() {
         rail = add_color(rail, "Background", ColorField::RailBackground);
-        rail = add_color(rail, "Border", ColorField::RailBorder);
+        rail = add_border(rail, ColorField::RailBorder, NumberField::RailBorderWidth);
         rail = rail
-            .add(number("Border width", NumberField::RailBorderWidth))
-            .add(number("Corner radius", NumberField::RailRadius))
-            .add(number("Padding", NumberField::RailPadding));
+            .add(settings::item(
+                "Corner radius",
+                number(NumberField::RailRadius),
+            ))
+            .add(settings::item("Padding", number(NumberField::RailPadding)));
         rail = add_color(rail, "Divider between keys", ColorField::RailDivider);
+    } else {
+        rail = rail.add(widget::text::caption(
+            "Off: keys are drawn on their own. Typed text needs the rail.",
+        ));
     }
 
     let mut keys = settings::section().title("Keys");
-    for (label, field) in [
-        ("Background", ColorField::KeyBackground),
-        ("While held", ColorField::KeyPressed),
-        ("Text", ColorField::KeyText),
-        ("Border", ColorField::KeyBorder),
-    ] {
-        keys = add_color(keys, label, field);
-    }
+    keys = add_color(keys, "Background", ColorField::KeyBackground);
+    keys = add_color(keys, "While held", ColorField::KeyPressed);
+    keys = add_color(keys, "Text", ColorField::KeyText);
+    let font_index = theme
+        .font
+        .as_ref()
+        .and_then(|font| font_options().iter().position(|f| f == font))
+        .unwrap_or(0);
+    keys = keys.add(settings::item(
+        "Font",
+        widget::dropdown(font_options(), Some(font_index), move |i| {
+            Message::Customize(CustomizeMessage::SetFont(i))
+        }),
+    ));
+    keys = add_border(keys, ColorField::KeyBorder, NumberField::KeyBorderWidth);
     let keys = keys
-        .add(number("Border width", NumberField::KeyBorderWidth))
-        .add(number("Corner radius", NumberField::KeyRadius))
-        .add(number("Gap between keys", NumberField::KeyGap))
+        .add(settings::item(
+            "Corner radius",
+            number(NumberField::KeyRadius),
+        ))
+        .add(settings::item(
+            "Gap between keys",
+            number(NumberField::KeyGap),
+        ))
         .add(settings::item(
             "Repeats",
-            widget::Row::new()
-                .spacing(12)
-                .push(choice(
-                    "Badge",
-                    theme.key.repeats == Repeats::Badge,
-                    CustomizeMessage::SetRepeats(Repeats::Badge),
-                ))
-                .push(choice(
-                    "Inline",
-                    theme.key.repeats == Repeats::Inline,
-                    CustomizeMessage::SetRepeats(Repeats::Inline),
-                ))
-                .push(choice(
-                    "Hide",
-                    theme.key.repeats == Repeats::Hidden,
-                    CustomizeMessage::SetRepeats(Repeats::Hidden),
-                )),
+            widget::segmented_control::horizontal(&draft.repeats_model)
+                .on_activate(move |e| send(CustomizeMessage::RepeatsTab(e)))
+                .width(Length::Shrink),
         ));
 
     let missing = draft.missing_icons();
@@ -659,17 +747,29 @@ pub fn view<'a>(
         .icons_dir
         .as_deref()
         .map(short_path)
-        .unwrap_or_else(|| "None, using Kiwi's icons".to_string());
+        .unwrap_or_else(|| "No folder, using Kiwi's icons".to_string());
     let mut icons = settings::section()
         .title("Icons")
-        .add(
-            settings::item::builder("Icon folder")
-                .description(folder)
-                .control(
-                    widget::button::standard("Choose…")
-                        .on_press(send(CustomizeMessage::ChooseIcons)),
-                ),
-        )
+        .add(settings::item_row(vec![
+            widget::container(widget::text::caption(folder).font(cosmic::font::mono()))
+                .padding([6, 12])
+                .width(Length::Fill)
+                .class(cosmic::theme::Container::custom(|theme| {
+                    let cosmic = theme.cosmic();
+                    widget::container::Style {
+                        background: Some(Color::from(cosmic.button.base).into()),
+                        border: cosmic::iced::Border {
+                            radius: cosmic.radius_xl().into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                }))
+                .into(),
+            widget::button::standard("Choose…")
+                .on_press(send(CustomizeMessage::ChooseIcons))
+                .into(),
+        ]))
         .add(
             settings::item::builder(format!(
                 "{} of {} icons found",
@@ -681,7 +781,7 @@ pub fn view<'a>(
                 widget::button::link(if draft.show_missing_icons {
                     "Hide list"
                 } else {
-                    "Show missing"
+                    "Show list"
                 })
                 .on_press(send(CustomizeMessage::ToggleMissingIcons)),
             ),
@@ -705,7 +805,8 @@ pub fn view<'a>(
 
     let mut content = widget::Column::new()
         .spacing(16)
-        .push(banner)
+        .push(preview(theme, icon_style))
+        .push(banner(draft))
         .push(layout)
         .push(rail)
         .push(keys)
@@ -714,35 +815,134 @@ pub fn view<'a>(
         content = content.push(widget::text::caption(message));
     }
 
-    let footer = widget::Column::new()
-        .spacing(8)
-        .push(
-            widget::Row::new()
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .push(
-                    widget::text_input("Theme name", &draft.save_name)
-                        .on_input(move |name| send(CustomizeMessage::SetSaveName(name)))
-                        .on_submit(move |_| send(CustomizeMessage::Save))
-                        .width(Length::Fill),
-                )
-                .push(
-                    widget::button::suggested("Save as theme")
-                        .on_press(send(CustomizeMessage::Save)),
-                ),
-        )
-        .push(
-            widget::Row::new()
-                .spacing(8)
-                .push(
-                    widget::button::text("Discard changes")
-                        .on_press_maybe(draft.edited.then(|| send(CustomizeMessage::Discard))),
-                )
-                .push(widget::Space::new().width(Length::Fill))
-                .push(widget::button::standard("Export…").on_press(Message::ExportTheme)),
-        );
+    let own_theme = matches!(draft.base, ThemeChoice::User(_));
+    let footer: Element<'a, Message> = if draft.naming {
+        widget::Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(
+                widget::text_input("Theme name", &draft.save_name)
+                    .on_input(move |name| send(CustomizeMessage::SetSaveName(name)))
+                    .on_submit(move |_| send(CustomizeMessage::Save))
+                    .width(Length::Fill),
+            )
+            .push(widget::button::standard("Cancel").on_press(send(CustomizeMessage::StopNaming)))
+            .push(widget::button::suggested("Save").on_press(send(CustomizeMessage::Save)))
+            .into()
+    } else {
+        let mut row = widget::Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(
+                widget::button::text("Discard changes")
+                    .on_press_maybe(draft.edited.then(|| send(CustomizeMessage::Discard))),
+            )
+            .push(widget::Space::new().width(Length::Fill))
+            .push(widget::button::standard("Export…").on_press(Message::ExportTheme));
+        row = if own_theme {
+            row.push(
+                widget::button::standard("Save as…").on_press(send(CustomizeMessage::StartNaming)),
+            )
+            .push(
+                widget::button::suggested("Save")
+                    .on_press_maybe(draft.edited.then(|| send(CustomizeMessage::SaveInPlace))),
+            )
+        } else {
+            row.push(
+                widget::button::suggested("Save as theme…")
+                    .on_press(send(CustomizeMessage::StartNaming)),
+            )
+        };
+        row.into()
+    };
 
-    (content.into(), footer.into())
+    (content.into(), footer)
+}
+
+/// Keys and rail drawn with the theme being edited, including a held key and a repeat
+fn preview<'a>(theme: &Theme, icon_style: IconStyle) -> Element<'a, Message> {
+    let ctrl = KeyModifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    let key = |k: &str| Keystroke::single(k, false);
+    let keys: Vec<Keystroke> = match theme.layout {
+        Layout::Keys => vec![
+            key("V"),
+            Keystroke::combination(&ctrl, "C", false),
+            Keystroke {
+                count: 3,
+                ..key("A")
+            },
+            Keystroke::single("↵", true),
+        ],
+        Layout::Text => "git commit"
+            .chars()
+            .map(|c| key(&c.to_string()))
+            .chain([Keystroke::combination(&ctrl, "S", true)])
+            .collect(),
+    };
+    let sample = keystrokes_row::<Message>(
+        &keys,
+        34.0,
+        60.0, // long enough that the sample never fades
+        theme,
+        260.0,
+        // Right-aligned so the order reads left to right, like typing
+        OverlayPosition::TopRight,
+        keys.len(),
+        icon_style,
+    );
+    // Checkerboard behind the keys shows how transparent the theme is
+    let checkerboard = Svg::new(svg::Handle::from_memory(CHECKERBOARD_SVG))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .content_fit(cosmic::iced::ContentFit::Cover);
+    widget::container(cosmic::iced::widget::stack![
+        checkerboard,
+        widget::container(sample)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(cosmic::iced::alignment::Horizontal::Center)
+            .align_y(cosmic::iced::alignment::Vertical::Center),
+    ])
+    .width(Length::Fill)
+    .height(Length::Fixed(96.0))
+    .clip(true)
+    .into()
+}
+
+/// Which theme is being edited, and whether saving is needed
+fn banner<'a>(draft: &Draft) -> Element<'a, Message> {
+    let line = match (&draft.base, draft.edited) {
+        (_, false) => "Changes show on the overlay as you make them.",
+        (ThemeChoice::Builtin(_), true) => {
+            "Built-in themes aren't changed. Save to keep this as your own."
+        }
+        (ThemeChoice::User(_), true) => "Save to keep these changes.",
+    };
+    widget::container(
+        widget::Column::new()
+            .spacing(2)
+            .push(widget::text::body(draft.name()).font(cosmic::font::semibold()))
+            .push(widget::text::caption(line)),
+    )
+    .padding([8, 12])
+    .width(Length::Fill)
+    .class(cosmic::theme::Container::custom(|theme| {
+        let cosmic = theme.cosmic();
+        let accent = Color::from(cosmic.accent_color());
+        widget::container::Style {
+            background: Some(Color { a: 0.1, ..accent }.into()),
+            border: cosmic::iced::Border {
+                color: Color { a: 0.35, ..accent },
+                width: 1.0,
+                radius: cosmic.radius_s().into(),
+            },
+            ..Default::default()
+        }
+    }))
+    .into()
 }
 
 #[cfg(test)]

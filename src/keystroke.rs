@@ -505,14 +505,10 @@ fn key_content<'a, M: 'a>(
 
         svg.into()
     } else {
-        // Use bundled Gemunu Libre font with bold weight
+        // The theme's font (Kiwi's bundled Gemunu Libre unless it picks another)
         text::Text::new(key.to_string())
             .size(font_size)
-            .font(cosmic::iced::Font {
-                family: cosmic::iced::font::Family::Name(FONT_NAME),
-                weight: cosmic::iced::font::Weight::Bold,
-                ..Default::default()
-            })
+            .font(theme.font())
             .class(cosmic::theme::Text::Color(text_color))
             .align_x(iced::alignment::Horizontal::Center)
             .align_y(iced::alignment::Vertical::Center)
@@ -1114,11 +1110,7 @@ fn typewriter_line<'a, M: 'a>(
                 .into(),
             LinePiece::Text(text, _) => text::Text::new(text.clone())
                 .size(font_size)
-                .font(cosmic::iced::Font {
-                    family: cosmic::iced::font::Family::Name(FONT_NAME),
-                    weight: cosmic::iced::font::Weight::Bold,
-                    ..Default::default()
-                })
+                .font(theme.font())
                 .wrapping(cosmic::iced::widget::text::Wrapping::None)
                 .class(cosmic::theme::Text::Color(Color {
                     a: text_color.a * opacity,
