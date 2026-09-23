@@ -77,6 +77,10 @@ pub struct SharedState {
     row_len: usize,
     /// When a key last left the slot for the row, which starts the slide
     shifted_at: Option<std::time::Instant>,
+    /// How many keys the slot's keystroke had last frame, to notice it growing
+    slot_parts: usize,
+    /// When the held combination in the slot grew, and how many keys it had before
+    slot_grew: Option<(std::time::Instant, usize)>,
     /// Key display mode (typed character vs physical key)
     pub key_display_mode: crate::config::KeyDisplayMode,
     /// Icon style (symbols vs text)
@@ -156,13 +160,16 @@ impl SharedState {
     /// True while keys are sliding: one just left the slot, or one is shrinking
     /// away as it expires. The overlay then needs frequent redraws.
     pub fn is_sliding(&self) -> bool {
-        let slide = crate::keystroke::SLIDE_SECS;
+        use crate::keystroke::{closing_secs, SLIDE_SECS, SLOT_GROW_SECS};
         let expiring = |k: &Keystroke| {
             let left = self.fade_duration - k.age_secs();
-            !k.pressed && (0.0..slide).contains(&left)
+            !k.pressed && (0.0..closing_secs(k)).contains(&left)
         };
         self.shifted_at
-            .is_some_and(|at| at.elapsed().as_secs_f32() < slide)
+            .is_some_and(|at| at.elapsed().as_secs_f32() < SLIDE_SECS)
+            || self
+                .slot_grew
+                .is_some_and(|(at, _)| at.elapsed().as_secs_f32() < SLOT_GROW_SECS)
             || self.history.iter().any(expiring)
             || self.preview.is_some()
     }
@@ -218,6 +225,8 @@ impl Default for SharedState {
             drag_offset: None,
             row_len: 0,
             shifted_at: None,
+            slot_parts: 0,
+            slot_grew: None,
             key_display_mode: crate::config::KeyDisplayMode::default(),
             icon_style: IconStyle::default(),
             history_count: 5,
@@ -394,7 +403,7 @@ struct Snapshot {
     touches: Vec<TouchPoint>,
     arranging: bool,
     drag_offset: cosmic::iced::Vector,
-    shifted_at: Option<std::time::Instant>,
+    motion: crate::keystroke::Motion,
 }
 
 impl Snapshot {
@@ -414,15 +423,23 @@ impl Snapshot {
         };
         // A key joining the row (the slot moved on to a new keystroke) starts the slide
         let fade_duration = s.fade_duration;
-        let row_len = keystrokes
+        let visible: Vec<&Keystroke> = keystrokes
             .iter()
             .filter(|k| !k.is_expired(fade_duration))
-            .count()
-            .saturating_sub(1);
+            .collect();
+        let row_len = visible.len().saturating_sub(1);
+        let slot_parts = visible.last().map_or(0, |k| k.keys.len());
+        let now = std::time::Instant::now();
         if row_len > s.row_len {
-            s.shifted_at = Some(std::time::Instant::now());
+            s.shifted_at = Some(now);
+            // A fresh keystroke in the slot appears as it is, without growing
+            s.slot_grew = None;
+        } else if slot_parts > s.slot_parts && s.slot_parts > 0 {
+            // The held combination gained a key (Ctrl, then Ctrl + Shift…)
+            s.slot_grew = Some((now, s.slot_parts));
         }
         s.row_len = row_len;
+        s.slot_parts = slot_parts;
 
         let touches = if s.enabled && s.show_touch && show_touches {
             s.touches.clone()
@@ -442,7 +459,10 @@ impl Snapshot {
             touches,
             arranging: s.arranging,
             drag_offset: s.drag_offset.unwrap_or_default(),
-            shifted_at: s.shifted_at,
+            motion: crate::keystroke::Motion {
+                shifted_at: s.shifted_at,
+                slot_grew: s.slot_grew,
+            },
         }
     }
 }
@@ -607,7 +627,7 @@ pub fn view_overlay(
             frame.position,
             frame.history_count as usize,
             frame.icon_style,
-            frame.shifted_at,
+            frame.motion,
         )
     };
 
@@ -617,20 +637,24 @@ pub fn view_overlay(
         content
     };
 
-    // Full-screen container with proper alignment. While dragging, the padding
-    // on the aligned side follows the pointer so the keys move with it.
+    // While dragging, the padding on the aligned side follows the pointer so
+    // the keys move with it
     let margin = frame.margin;
     let offset = frame.drag_offset;
-    let (left, right) = match h_align {
-        Horizontal::Left => (margin + offset.x, margin),
-        Horizontal::Right => (margin, margin - offset.x),
-        // Centered content moves by half the extra padding on one side
-        _ if offset.x >= 0.0 => (margin + 2.0 * offset.x, margin),
-        _ => (margin, margin - 2.0 * offset.x),
-    };
     let (top, bottom) = match v_align {
         Vertical::Top => (margin + offset.y, margin),
         _ => (margin, margin - offset.y),
+    };
+    let (left, right) = match h_align {
+        Horizontal::Left => (margin + offset.x, margin),
+        Horizontal::Right => (margin, margin - offset.x),
+        // Centered: the horizontal offset is handled by `centered` below
+        _ => (0.0, 0.0),
+    };
+    let content = if h_align == Horizontal::Center {
+        centered(content, offset.x)
+    } else {
+        content
     };
     let keystroke_layer: cosmic::Element<'static, Message> = cosmic::widget::container(content)
         .width(cosmic::iced::Length::Fill)
@@ -677,6 +701,32 @@ pub fn view_overlay(
     cosmic::iced::widget::stack![touch_layer, keystroke_layer].into()
 }
 
+/// Center positions: the keys end at the middle of the screen and grow leftward
+/// only, so nothing shifts in both directions as keys come and go. `dx` moves
+/// them sideways while they're dragged.
+fn centered(
+    content: cosmic::Element<'static, Message>,
+    dx: f32,
+) -> cosmic::Element<'static, Message> {
+    use cosmic::iced::Length;
+    use cosmic::widget;
+
+    // Two halves split the space that's left; fixed space before them (or
+    // between them) moves the middle right (or left) by half its width
+    let shift = widget::Space::new().width(Length::Fixed(2.0 * dx.abs()));
+    let left_half = widget::container(content)
+        .width(Length::Fill)
+        .align_x(cosmic::iced::alignment::Horizontal::Right);
+    let right_half = widget::Space::new().width(Length::Fill);
+    let row = widget::Row::new();
+    let row = if dx >= 0.0 {
+        row.push(shift).push(left_half).push(right_half)
+    } else {
+        row.push(left_half).push(shift).push(right_half)
+    };
+    row.width(Length::Fill).into()
+}
+
 /// Let a surface take pointer and keyboard input (for arrange mode), or make it click-through again
 pub fn set_interactive(
     surface_id: window::Id,
@@ -712,12 +762,19 @@ fn spot_bounds(
     margin: f32,
     key_size: f32,
 ) -> cosmic::iced::Rectangle {
-    let width = (bounds.width * 0.28).min(360.0);
+    let side_width = (bounds.width * 0.28).min(360.0);
+    // The keys end at the middle of the screen, so the center spot runs leftward
+    // from there, stopping short of the left spot
+    let center_width = side_width.min(bounds.width / 2.0 - margin - side_width - 12.0);
     let height = key_size * 1.6;
-    let x = match position {
-        OverlayPosition::TopLeft | OverlayPosition::BottomLeft => margin,
-        OverlayPosition::TopCenter | OverlayPosition::BottomCenter => (bounds.width - width) / 2.0,
-        OverlayPosition::TopRight | OverlayPosition::BottomRight => bounds.width - width - margin,
+    let (x, width) = match position {
+        OverlayPosition::TopLeft | OverlayPosition::BottomLeft => (margin, side_width),
+        OverlayPosition::TopCenter | OverlayPosition::BottomCenter => {
+            (bounds.width / 2.0 - center_width, center_width)
+        }
+        OverlayPosition::TopRight | OverlayPosition::BottomRight => {
+            (bounds.width - side_width - margin, side_width)
+        }
     };
     let y = match position {
         OverlayPosition::TopLeft | OverlayPosition::TopCenter | OverlayPosition::TopRight => margin,
@@ -962,7 +1019,8 @@ fn arranging_keys(
     let column = widget::Column::new().spacing(8).align_x(match h_align {
         cosmic::iced::alignment::Horizontal::Left => cosmic::iced::Alignment::Start,
         cosmic::iced::alignment::Horizontal::Right => cosmic::iced::Alignment::End,
-        _ => cosmic::iced::Alignment::Center,
+        // Center positions end at the middle of the screen, like the right side
+        _ => cosmic::iced::Alignment::End,
     });
     match v_align {
         cosmic::iced::alignment::Vertical::Top => column.push(outlined).push(hint),
@@ -1078,6 +1136,24 @@ mod tests {
         state.history.push(Keystroke::single("b", false));
         Snapshot::take(&mut state, false);
         assert!(state.shifted_at.is_none());
+    }
+
+    #[test]
+    fn a_growing_combination_widens_the_slot() {
+        let mut state = SharedState::default();
+        state.history.push(Keystroke::single("a", false));
+        Snapshot::take(&mut state, false);
+
+        // Holding Ctrl: a fresh keystroke in the slot, which doesn't grow
+        state.modifiers.ctrl = true;
+        Snapshot::take(&mut state, false);
+        assert!(state.slot_grew.is_none());
+
+        // Adding Shift grows the held combination from one key to two
+        state.modifiers.shift = true;
+        let frame = Snapshot::take(&mut state, false);
+        assert_eq!(state.slot_grew.map(|(_, from)| from), Some(1));
+        assert_eq!(frame.motion.slot_grew.map(|(_, from)| from), Some(1));
     }
 
     #[test]

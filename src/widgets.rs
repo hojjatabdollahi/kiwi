@@ -185,12 +185,15 @@ impl<M> canvas::Program<M, cosmic::Theme> for RoundSwatch {
 }
 
 /// Shows a fraction of its content's width, clipped, keeping one side. Growing
-/// the fraction from 0 to 1 slides the content in from that side and pushes its
-/// neighbors along; shrinking it slides the content out.
+/// the fraction from 0 to 1 opens room and pushes the neighbors along; shrinking
+/// it closes the room again. The content can also be drawn nudged toward the kept
+/// side, by a fraction of its own width, without moving anything else.
 pub struct Reveal<'a, M> {
     content: Element<'a, M>,
     fraction: f32,
     keep_right: bool,
+    nudge: f32,
+    max_width: f32,
 }
 
 impl<'a, M> Reveal<'a, M> {
@@ -200,7 +203,22 @@ impl<'a, M> Reveal<'a, M> {
             content: content.into(),
             fraction: fraction.clamp(0.0, 1.0),
             keep_right,
+            nudge: 0.0,
+            max_width: f32::INFINITY,
         }
+    }
+
+    /// Never take up more than this width; the rest of the content is clipped
+    /// away on the side that isn't kept
+    pub fn max_width(mut self, max_width: f32) -> Self {
+        self.max_width = max_width.max(0.0);
+        self
+    }
+
+    /// Draw the content shifted toward the kept side by this fraction of its width
+    pub fn nudge(mut self, nudge: f32) -> Self {
+        self.nudge = nudge;
+        self
     }
 }
 
@@ -233,7 +251,7 @@ impl<M> cosmic::widget::Widget<M, cosmic::Theme, cosmic::Renderer> for Reveal<'_
                 .as_widget_mut()
                 .layout(&mut tree.children[0], renderer, &unbounded);
         let full = content.size();
-        let width = full.width * self.fraction;
+        let width = (full.width * self.fraction).min(self.max_width);
         let x = if self.keep_right {
             width - full.width
         } else {
@@ -260,17 +278,27 @@ impl<M> cosmic::widget::Widget<M, cosmic::Theme, cosmic::Renderer> for Reveal<'_
         let Some(content) = layout.children().next() else {
             return;
         };
-        renderer.with_layer(layout.bounds(), |renderer| {
-            self.content.as_widget().draw(
-                &tree.children[0],
-                renderer,
-                theme,
-                style,
-                content,
-                cursor,
-                viewport,
-            );
-        });
+        let direction = if self.keep_right { 1.0 } else { -1.0 };
+        let shift = cosmic::iced::Vector::new(direction * self.nudge * content.bounds().width, 0.0);
+        let draw = |renderer: &mut cosmic::Renderer| {
+            renderer.with_translation(shift, |renderer| {
+                self.content.as_widget().draw(
+                    &tree.children[0],
+                    renderer,
+                    theme,
+                    style,
+                    content,
+                    cursor,
+                    viewport,
+                );
+            });
+        };
+        // Only clip while part of the content is hidden
+        if layout.bounds().width < content.bounds().width - 0.5 {
+            renderer.with_layer(layout.bounds(), draw);
+        } else {
+            draw(renderer);
+        }
     }
 }
 

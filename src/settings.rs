@@ -292,7 +292,7 @@ fn theme_card(
         OverlayPosition::TopRight,
         keys.len(),
         icon_style,
-        None,
+        crate::keystroke::Motion::default(),
     );
 
     // Checkerboard behind the keys shows how transparent the theme is

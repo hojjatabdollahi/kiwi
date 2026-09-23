@@ -764,8 +764,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     position: OverlayPosition,
     history_count: usize,
     icon_style: IconStyle,
-    // When the last keystroke left the slot for the row (starts the slide)
-    shifted_at: Option<Instant>,
+    motion: Motion,
 ) -> Element<'a, M> {
     if theme.layout == Layout::Text {
         return typewriter_line(
@@ -805,12 +804,15 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
             | OverlayPosition::BottomCenter
     );
     let gap = theme.key.gap;
-    let entering = slide_progress(shifted_at);
-    let row_slots = history_count.saturating_sub(1);
+    let (opening, arriving) = slide_phases(motion.shifted_at);
+    // The row shows this much, measured in single keys; older keys slide out past
+    // its far edge, fading as they cross it
+    let window = history_count.saturating_sub(1) as f32 * (key_size + gap);
 
-    // A key at `width` (0-1) of its size, sliding toward or away from the slot side.
-    // Row keys carry their gap on the slot side, so it slides with them.
-    let key = |k: &Keystroke, width: f32, dim: f32, gap: f32| -> Element<'a, M> {
+    // A key taking up `width` (0-1) of its room, drawn at `dim` opacity and nudged
+    // toward the slot by `nudge` of its width. Row keys carry their gap on the slot
+    // side, so the gap moves with them.
+    let key = |k: &Keystroke, width: f32, dim: f32, nudge: f32, gap: f32| -> Element<'a, M> {
         let opacity = k.opacity(fade_duration) * dim;
         let widget = keystroke_widget(k, key_size, opacity, theme, position, icon_style);
         let padding = if slot_on_right {
@@ -819,91 +821,139 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
             [0.0, 0.0, 0.0, gap]
         };
         let widget: Element<'a, M> = widget::container(widget).padding(padding).into();
-        if width >= 1.0 {
+        if width >= 1.0 && nudge == 0.0 {
             widget
         } else {
-            Reveal::new(widget, width, slot_on_right).into()
+            Reveal::new(widget, width, slot_on_right)
+                .nudge(nudge)
+                .into()
         }
     };
 
-    // Row keys, newest first. The newest slides out of the slot; when the row is
-    // full, the oldest shrinks away at the far end at the same time; keys about to
-    // expire shrink away too.
+    // Row keys, newest first. The newest one arrives in two steps: first the row
+    // slides over to open room for it, then it glides into that room from the slot
+    // side. Keys about to expire close up at a steady speed, so a wide combination
+    // takes as long as its width needs.
     let mut row: Vec<Element<'a, M>> = Vec::new();
+    // How far the next key starts from the slot (estimated)
+    let mut distance = 0.0;
     for (i, k) in older.iter().rev().enumerate() {
-        let (width, dim) = match i {
-            _ if i > row_slots => break,
-            _ if i == row_slots => (1.0 - entering, 1.0 - entering),
-            0 => (entering, 1.0),
-            _ => (1.0, 1.0),
+        if distance >= window {
+            break;
+        }
+        let (width, dim, nudge) = if i == 0 {
+            (opening, arriving, (1.0 - arriving) * 0.35)
+        } else {
+            (1.0, 1.0, 0.0)
         };
         let width = width.min(leaving(k, fade_duration));
         if width <= 0.0 {
             continue;
         }
-        row.push(key(k, width, dim, gap));
+        let room = (key_width(k, key_size, theme) + gap) * width;
+        // Fade out as the key crosses the far edge of the window
+        let inside = ((window - distance) / room).clamp(0.0, 1.0);
+        row.push(key(k, width, dim * inside, nudge, gap));
+        distance += room;
     }
-    let slot = key(slot, leaving(slot, fade_duration), 1.0, 0.0);
+    if slot_on_right {
+        row.reverse();
+    }
 
-    // The slot is set a little apart from the row
-    let separation: Element<'a, M> = widget::Space::new()
-        .width(Length::Fixed(gap + key_size * 0.15))
-        .into();
-    let ordered_children: Vec<Element<'a, M>> = if slot_on_right {
-        row.into_iter().rev().chain([separation, slot]).collect()
-    } else {
-        [slot, separation].into_iter().chain(row).collect()
+    // While the held combination grows (Ctrl, then Ctrl + Shift…), the slot widens
+    // smoothly: its keys glide over and the new one slides in from the screen edge
+    let slot_width = match motion.slot_grew {
+        Some((at, from_parts)) if from_parts < slot.keys.len() => {
+            let t = (at.elapsed().as_secs_f32() / SLOT_GROW_SECS).min(1.0);
+            let eased = 1.0 - (1.0 - t).powi(3);
+            let from = parts_width(from_parts, key_size) / parts_width(slot.keys.len(), key_size);
+            from + (1.0 - from) * eased
+        }
+        _ => 1.0,
+    };
+    let slot_width = slot_width.min(leaving(slot, fade_duration));
+    let slot: Element<'a, M> = {
+        let widget = keystroke_widget(
+            slot,
+            key_size,
+            slot.opacity(fade_duration),
+            theme,
+            position,
+            icon_style,
+        );
+        if slot_width >= 1.0 {
+            widget
+        } else {
+            Reveal::new(widget, slot_width, false).into()
+        }
     };
 
     let is_bottom = matches!(
         position,
         OverlayPosition::BottomLeft | OverlayPosition::BottomRight | OverlayPosition::BottomCenter
     );
-
-    let Some(rail) = theme.rail else {
-        return widget::row::with_children(ordered_children)
-            .align_y(if is_bottom {
-                iced::Alignment::End
-            } else {
-                iced::Alignment::Start
-            })
-            .into();
+    let align = if is_bottom {
+        iced::Alignment::End
+    } else {
+        iced::Alignment::Start
     };
 
-    let fade = |color: Color| Color {
-        a: color.a * rail_opacity,
-        ..color
-    };
-
-    // Thin lines between keys
-    let children: Vec<Element<'a, M>> = match rail.divider {
-        None => ordered_children,
-        Some(color) => {
-            let color = fade(color.0);
-            let mut with_dividers = Vec::new();
-            for (i, child) in ordered_children.into_iter().enumerate() {
-                if i > 0 {
-                    with_dividers.push(
-                        widget::container(widget::Space::new())
-                            .width(Length::Fixed(1.0))
-                            .height(Length::Fixed(key_size))
-                            .class(cosmic::theme::Container::custom(move |_| {
-                                container::Style {
-                                    background: Some(Background::Color(color)),
-                                    ..Default::default()
-                                }
-                            }))
-                            .into(),
-                    );
+    // Thin lines between keys, if the theme draws them
+    let divider = theme.rail.and_then(|rail| rail.divider).map(|color| {
+        let color = Color {
+            a: color.0.a * rail_opacity,
+            ..color.0
+        };
+        move || -> Element<'a, M> {
+            widget::container(widget::Space::new())
+                .width(Length::Fixed(1.0))
+                .height(Length::Fixed(key_size))
+                .class(cosmic::theme::Container::custom(move |_| {
+                    container::Style {
+                        background: Some(Background::Color(color)),
+                        ..Default::default()
+                    }
+                }))
+                .into()
+        }
+    });
+    let join = |children: Vec<Element<'a, M>>| -> Vec<Element<'a, M>> {
+        match divider {
+            None => children,
+            Some(divider) => {
+                let mut joined = Vec::new();
+                for (i, child) in children.into_iter().enumerate() {
+                    if i > 0 {
+                        joined.push(divider());
+                    }
+                    joined.push(child);
                 }
-                with_dividers.push(child);
+                joined
             }
-            with_dividers
         }
     };
 
+    let has_row = !row.is_empty();
+    let row: Element<'a, M> = Reveal::new(
+        widget::row::with_children(join(row)).align_y(align),
+        1.0,
+        slot_on_right,
+    )
+    .max_width(window)
+    .into();
+    let ordered_children: Vec<Element<'a, M>> = match (has_row, slot_on_right) {
+        (false, _) => vec![slot],
+        (true, true) => join(vec![row, slot]),
+        (true, false) => join(vec![slot, row]),
+    };
+
+    let Some(rail) = theme.rail else {
+        return widget::row::with_children(ordered_children)
+            .align_y(align)
+            .into();
+    };
     on_rail(
-        widget::row::with_children(children)
+        widget::row::with_children(ordered_children)
             .align_y(iced::Alignment::Center)
             .into(),
         &rail,
@@ -911,21 +961,66 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     )
 }
 
-/// How long keys take to slide when one leaves the slot or the row
-pub const SLIDE_SECS: f32 = 0.22;
-
-/// How far the newest row key has slid out of the slot, eased (1.0 when done)
-fn slide_progress(shifted_at: Option<Instant>) -> f32 {
-    let t = shifted_at.map_or(1.0, |at| (at.elapsed().as_secs_f32() / SLIDE_SECS).min(1.0));
-    1.0 - (1.0 - t).powi(3)
+/// What's moving in the key row: a key leaving the slot, or the slot's held
+/// combination growing. The default is nothing moving.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Motion {
+    /// When the last keystroke left the slot for the row
+    pub shifted_at: Option<Instant>,
+    /// When the held combination in the slot grew, and how many keys it had before
+    pub slot_grew: Option<(Instant, usize)>,
 }
 
-/// A key's width while it expires: full, then shrinking away over its last moments
+/// How long the slot takes to widen when a key joins the held combination
+pub const SLOT_GROW_SECS: f32 = 0.18;
+
+/// Width of a keystroke with `parts` keys ("Ctrl + ⇧ + C" has three)
+fn parts_width(parts: usize, key_size: f32) -> f32 {
+    let parts = parts.max(1) as f32;
+    parts * key_size + (parts - 1.0) * PLUS_WIDTH
+}
+
+/// A keystroke's width without its gap, estimated from its keys and repeat count
+fn key_width(keystroke: &Keystroke, key_size: f32, theme: &Theme) -> f32 {
+    let repeat = if theme.key.repeats == Repeats::Inline && keystroke.count > 1 {
+        // "×12" at 0.3 of the key size, plus its padding
+        let digits = keystroke.count.to_string().len() as f32 + 1.0;
+        digits * key_size * 0.3 * 0.6 + key_size * 0.15
+    } else {
+        0.0
+    };
+    parts_width(keystroke.keys.len(), key_size) + repeat
+}
+
+/// How long a key takes to move from the slot into the row
+pub const SLIDE_SECS: f32 = 0.3;
+
+/// The share of the slide spent opening room in the row, before the key arrives
+const OPENING_SHARE: f32 = 0.55;
+
+/// How far along the two steps of a slide are, each eased from 0.0 to 1.0: the
+/// row opening room, then the key arriving in it. Both are 1.0 when nothing slides.
+fn slide_phases(shifted_at: Option<Instant>) -> (f32, f32) {
+    let t = shifted_at.map_or(1.0, |at| (at.elapsed().as_secs_f32() / SLIDE_SECS).min(1.0));
+    let ease = |x: f32| 1.0 - (1.0 - x.clamp(0.0, 1.0)).powi(3);
+    (
+        ease(t / OPENING_SHARE),
+        ease((t - OPENING_SHARE) / (1.0 - OPENING_SHARE)),
+    )
+}
+
+/// A key's width while it expires: full, then closing up over its last moments,
+/// taking longer the more keys it has so every key closes at the same speed
 fn leaving(keystroke: &Keystroke, fade_duration: f32) -> f32 {
     if keystroke.pressed {
         return 1.0;
     }
-    ((fade_duration - keystroke.age_secs()) / SLIDE_SECS).clamp(0.0, 1.0)
+    ((fade_duration - keystroke.age_secs()) / closing_secs(keystroke)).clamp(0.0, 1.0)
+}
+
+/// How long an expiring keystroke takes to close up
+pub fn closing_secs(keystroke: &Keystroke) -> f32 {
+    SLIDE_SECS * keystroke.keys.len().max(1) as f32
 }
 
 /// Put `content` on the theme's rail, faded to `opacity`
@@ -1229,6 +1324,20 @@ mod tests {
         // Backspace is shown as a key, not applied to the text
         assert_eq!(line(&typed), "Hello w[⌫][Ctrl+S][↵]@");
         assert_eq!(line(&[key("␣"), key("Tab"), key("⇧")]), " [Tab][⇧]");
+    }
+
+    #[test]
+    fn room_opens_before_the_key_arrives() {
+        assert_eq!(slide_phases(None), (1.0, 1.0));
+        let (opening, arriving) = slide_phases(Some(Instant::now()));
+        assert!(opening < 0.1 && arriving == 0.0);
+        // Halfway through the opening step, the key hasn't started arriving
+        let at =
+            Instant::now() - std::time::Duration::from_secs_f32(SLIDE_SECS * OPENING_SHARE / 2.0);
+        let (opening, arriving) = slide_phases(Some(at));
+        assert!(opening > 0.5 && opening < 1.0 && arriving == 0.0);
+        let done = Instant::now() - std::time::Duration::from_secs_f32(SLIDE_SECS);
+        assert_eq!(slide_phases(Some(done)), (1.0, 1.0));
     }
 
     #[test]
