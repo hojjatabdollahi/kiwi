@@ -107,17 +107,6 @@ impl KeyDisplayMode {
 }
 
 impl OverlayPosition {
-    /// The corner an anchor point belongs to: keys grow from it toward the
-    /// middle of the screen, and the repeat badge sits on the inside
-    pub fn from_anchor((x, y): (f32, f32)) -> Self {
-        match (x > 0.5, y > 0.5) {
-            (false, false) => Self::TopLeft,
-            (true, false) => Self::TopRight,
-            (false, true) => Self::BottomLeft,
-            (true, true) => Self::BottomRight,
-        }
-    }
-
     pub const ALL: &'static [OverlayPosition] = &[
         OverlayPosition::TopLeft,
         OverlayPosition::TopCenter,
@@ -189,6 +178,9 @@ pub struct Config {
     /// Where the newest key sits, as fractions of the screen's width and height,
     /// set by dragging the keys on screen
     pub anchor: Option<(f32, f32)>,
+    /// Whether the keys grow leftward from the anchor (else rightward). Flipped
+    /// in arrange mode; before that, keys on the right half grow leftward.
+    pub grow_left: Option<bool>,
     /// Width of the typewriter line, overriding the theme's
     pub line_width: Option<f32>,
     /// Key display mode - typed character or physical key
@@ -227,6 +219,13 @@ impl Config {
     }
 }
 
+impl Config {
+    /// Whether the keys grow leftward from the anchor (else rightward)
+    pub fn grows_left(&self) -> bool {
+        self.grow_left.unwrap_or(self.anchor().0 > 0.5)
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -238,6 +237,7 @@ impl Default for Config {
             position: OverlayPosition::TopRight,
             margin: 20.0,
             anchor: None,
+            grow_left: None,
             line_width: None,
             key_display_mode: KeyDisplayMode::TypedCharacter,
             icon_style: IconStyle::Symbol,
@@ -269,19 +269,19 @@ mod tests {
             position: OverlayPosition::TopCenter,
             ..old.clone()
         };
-        assert_eq!(
-            OverlayPosition::from_anchor(center.anchor()),
-            OverlayPosition::TopRight
-        );
+        assert!(center.grows_left());
         // A dragged anchor wins over the old position
         let dragged = Config {
             anchor: Some((0.3, 0.7)),
             ..old
         };
         assert_eq!(dragged.anchor(), (0.3, 0.7));
-        assert_eq!(
-            OverlayPosition::from_anchor(dragged.anchor()),
-            OverlayPosition::BottomLeft
-        );
+        assert!(!dragged.grows_left());
+        // Flipping wins over which half the keys are on
+        let flipped = Config {
+            grow_left: Some(true),
+            ..dragged
+        };
+        assert!(flipped.grows_left());
     }
 }

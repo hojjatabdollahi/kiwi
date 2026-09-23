@@ -149,6 +149,8 @@ pub enum Message {
     StartArranging,
     /// Put the newest key here, as fractions of the screen (dragging in arrange mode)
     MoveKeys(f32, f32),
+    /// Switch which way the keys grow from their anchor
+    FlipGrowth,
     FinishArranging,
     CancelArranging,
     ResetArrangement,
@@ -607,6 +609,10 @@ impl cosmic::Application for KiwiApp {
             }
             Message::ThemeMessage(message) => self.theme_message = Some(message),
             Message::Customize(message) => return self.update_customize(message),
+            Message::FlipGrowth => {
+                self.config.grow_left = Some(!self.config.grows_left());
+                self.apply_arrangement();
+            }
             Message::MoveKeys(x, y) => {
                 self.config.anchor = Some((x, y));
                 self.apply_arrangement();
@@ -635,6 +641,7 @@ impl cosmic::Application for KiwiApp {
                 self.config.key_size = default_size;
                 self.config.position = defaults.position;
                 self.config.anchor = defaults.anchor;
+                self.config.grow_left = defaults.grow_left;
                 self.config.line_width = None;
                 if layout == theme::Layout::Keys {
                     self.config.history_count = defaults.history_count;
@@ -1009,6 +1016,7 @@ impl KiwiApp {
             let before = arranging.before;
             self.config.position = before.position;
             self.config.anchor = before.anchor;
+            self.config.grow_left = before.grow_left;
             self.config.key_size = before.key_size;
             self.config.line_width = before.line_width;
             self.config.history_count = before.history_count;

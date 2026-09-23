@@ -75,18 +75,54 @@ fn parse_hex(s: &str) -> Option<Color> {
     ))
 }
 
-/// A background: one color, or two for a 45° gradient
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+/// A background: one color, or a gradient of two at an angle in degrees
+/// (0 runs bottom to top, 90 left to right; 45 is the default)
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Fill {
     Solid(Hex),
+    Gradient(Stop, Stop, f32),
+}
+
+/// The angle gradients have unless a theme picks another
+pub const DEFAULT_GRADIENT_ANGLE: f32 = 45.0;
+
+impl Fill {
+    /// A gradient from `start` to `end` at the default angle, spread over its whole length
+    pub fn gradient(start: Hex, end: Hex) -> Self {
+        Self::Gradient(Stop::new(start), Stop::new(end), DEFAULT_GRADIENT_ANGLE)
+    }
+}
+
+/// How a fill is written in a theme file: a color, `(start, end)` for a gradient
+/// at the default angle, or `(start, end, degrees)`
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum FillRepr {
+    Solid(Hex),
+    Angled(Stop, Stop, f32),
     Gradient(Stop, Stop),
 }
 
-impl Fill {
-    /// A gradient from `start` to `end`, spread over its whole length
-    pub fn gradient(start: Hex, end: Hex) -> Self {
-        Self::Gradient(Stop::new(start), Stop::new(end))
+impl Serialize for Fill {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match *self {
+            Fill::Solid(color) => FillRepr::Solid(color),
+            Fill::Gradient(start, end, angle) if (angle - DEFAULT_GRADIENT_ANGLE).abs() < 0.01 => {
+                FillRepr::Gradient(start, end)
+            }
+            Fill::Gradient(start, end, angle) => FillRepr::Angled(start, end, angle),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Fill {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match FillRepr::deserialize(deserializer)? {
+            FillRepr::Solid(color) => Fill::Solid(color),
+            FillRepr::Angled(start, end, angle) => Fill::Gradient(start, end, angle),
+            FillRepr::Gradient(start, end) => Fill::Gradient(start, end, DEFAULT_GRADIENT_ANGLE),
+        })
     }
 }
 
@@ -1103,7 +1139,7 @@ mod tests {
         // A color moved along the gradient keeps its spot
         let moved: Theme =
             ron::from_str(r##"(key: (background: (("#000000", 0.25), "#ffffff")))"##).unwrap();
-        let Fill::Gradient(start, end) = moved.key.background else {
+        let Fill::Gradient(start, end, _) = moved.key.background else {
             panic!("expected a gradient");
         };
         assert_eq!((start.at, end.at), (Some(0.25), None));
@@ -1125,6 +1161,13 @@ mod tests {
             ron::from_str(r##"(key: (border: (color: ("#ff0000", "#0000ff"), width: 2.0)))"##)
                 .unwrap();
         assert!(matches!(gradient.key.border.color, Fill::Gradient(..)));
+        // An angle other than the default is kept
+        let angled: Theme =
+            ron::from_str(r##"(key: (background: ("#000000", "#ffffff", 120.0)))"##).unwrap();
+        assert!(matches!(angled.key.background, Fill::Gradient(_, _, a) if a == 120.0));
+        assert!(ron::to_string(&angled.key.background)
+            .unwrap()
+            .contains("120"));
 
         // Rail visibility and key expiry have defaults, and read back when set
         let set: Theme =

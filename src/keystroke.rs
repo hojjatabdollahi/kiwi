@@ -684,65 +684,45 @@ fn keycap<'a, M: 'a>(
         .into()
 }
 
-/// Wraps a widget with a badge area.
-/// Badge is above for bottom positions, below for top positions.
-/// Always reserves space for the badge to prevent layout shifts when count changes.
-fn wrap_with_badge_area<'a, M: 'a>(
+/// Puts the repeat count ("×3") in a small pill in the key's top-right corner,
+/// on top of the key, so a count appearing doesn't change the key's size
+fn with_badge<'a, M: 'a>(
     widget: Element<'a, M>,
     count: u32,
     key_size: f32,
     count_color: Color,
     count_bg: Color,
-    position: OverlayPosition,
 ) -> Element<'a, M> {
-    let count_font_size = key_size * 0.3;
-    // Badge height = font + padding (approximately)
-    let badge_height = count_font_size + 4.0;
-    let spacing = (key_size * 0.05) as u16;
-
-    // Always create a column with widget + badge area
-    let badge: Element<'a, M> = if count > 1 {
-        widget::container(
-            text::Text::new(format!("x{}", count))
-                .size(count_font_size)
-                .class(cosmic::theme::Text::Color(count_color))
-                .align_x(iced::alignment::Horizontal::Center),
-        )
-        .padding([2, 6])
-        .class(cosmic::theme::Container::custom(move |_| {
-            container::Style {
-                background: Some(Background::Color(count_bg)),
-                border: Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: (count_font_size * 0.6).into(),
-                },
-                ..Default::default()
-            }
-        }))
-        .into()
-    } else {
-        // Invisible placeholder to reserve space
-        widget::Space::new()
-            .height(Length::Fixed(badge_height))
-            .into()
-    };
-
-    // For bottom positions, badge goes above; for top positions, badge goes below
-    let is_bottom = matches!(
-        position,
-        OverlayPosition::BottomLeft | OverlayPosition::BottomRight | OverlayPosition::BottomCenter
-    );
-
-    let mut col = widget::Column::new()
-        .align_x(iced::Alignment::Center)
-        .spacing(spacing);
-    if is_bottom {
-        col = col.push(badge).push(widget);
-    } else {
-        col = col.push(widget).push(badge);
+    if count <= 1 {
+        return widget;
     }
-    col.into()
+    let font_size = key_size * 0.24;
+    let badge = widget::container(
+        text::Text::new(format!("×{count}"))
+            .size(font_size)
+            .class(cosmic::theme::Text::Color(count_color)),
+    )
+    .padding([0.0, font_size * 0.4])
+    .class(cosmic::theme::Container::custom(move |_| {
+        container::Style {
+            background: Some(Background::Color(count_bg)),
+            border: Border {
+                radius: font_size.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }));
+    cosmic::iced::widget::stack![
+        widget,
+        widget::container(badge)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Right)
+            .align_y(iced::alignment::Vertical::Top)
+            .padding(key_size * 0.06),
+    ]
+    .into()
 }
 
 /// Renders a keystroke widget at the given opacity
@@ -754,7 +734,6 @@ fn keystroke_widget<'a, M: 'a>(
     key_size: f32,
     opacity: f32,
     theme: &Theme,
-    position: OverlayPosition,
     icon_style: IconStyle,
 ) -> Element<'a, M> {
     let plus_font_size = plus_font_size_for_key(key_size);
@@ -865,14 +844,12 @@ fn keystroke_widget<'a, M: 'a>(
     };
 
     match style.repeats {
-        // Always reserve space for the badge to prevent relayout
-        Repeats::Badge => wrap_with_badge_area(
+        Repeats::Badge => with_badge(
             key_widget,
             keystroke.count,
             key_size,
             fade(style.badge_text.0),
             fade(style.badge_background.0),
-            position,
         ),
         Repeats::Inline | Repeats::Hidden => key_widget,
     }
@@ -886,9 +863,9 @@ fn fill_background(fill: Fill, opacity: f32) -> Background {
     };
     match fill {
         Fill::Solid(color) => Background::Color(fade(color.0)),
-        Fill::Gradient(start, end) => {
+        Fill::Gradient(start, end, angle) => {
             let (start_at, end_at) = theme::stop_positions(&start, &end);
-            let grad = gradient::Linear::new(std::f32::consts::PI / 4.0) // 45 degree angle
+            let grad = gradient::Linear::new(iced::Radians(angle.to_radians()))
                 .add_stop(start_at, fade(start.color.0))
                 .add_stop(end_at, fade(end.color.0));
             Background::Gradient(gradient::Gradient::Linear(grad))
@@ -916,7 +893,6 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
             fade_duration,
             theme,
             line_width,
-            position,
             icon_style,
         );
     }
@@ -1006,7 +982,7 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         let inside = ((window - distance) / room).clamp(0.0, 1.0);
         let opacity = key_opacity(theme, k, fade_duration) * dim * inside;
 
-        let mut widget = keystroke_widget(k, key_size, opacity, theme, position, icon_style);
+        let mut widget = keystroke_widget(k, key_size, opacity, theme, icon_style);
         if i == 0 && grown < 1.0 {
             widget = Reveal::new(widget, grown, false).into();
         }
@@ -1220,10 +1196,10 @@ fn with_border<'a, M: 'a>(
     };
     let (solid, gradient) = match border.color {
         Fill::Solid(color) => (fade(color.0), None),
-        Fill::Gradient(start, end) => {
+        Fill::Gradient(start, end, angle) => {
             let (start_at, end_at) = theme::stop_positions(&start, &end);
             let stops = [(start_at, fade(start.color.0)), (end_at, fade(end.color.0))];
-            (Color::TRANSPARENT, Some(stops))
+            (Color::TRANSPARENT, Some((stops, angle)))
         }
     };
     let container = container.class(cosmic::theme::Container::custom(move |_| {
@@ -1243,10 +1219,11 @@ fn with_border<'a, M: 'a>(
     }));
     match gradient {
         None => container.into(),
-        Some(stops) => cosmic::iced::widget::stack![
+        Some((stops, angle)) => cosmic::iced::widget::stack![
             container,
             widget::Canvas::new(GradientBorder {
                 stops,
+                angle,
                 width: border.width,
                 radius,
             })
@@ -1261,6 +1238,8 @@ fn with_border<'a, M: 'a>(
 struct GradientBorder {
     /// The gradient's two colors and where they sit, from 0 to 1
     stops: [(f32, Color); 2],
+    /// Its angle in degrees, the same way backgrounds use it
+    angle: f32,
     width: f32,
     radius: f32,
 }
@@ -1287,12 +1266,12 @@ impl<M> widget::canvas::Program<M, cosmic::Theme> for GradientBorder {
         let size = iced::Size::new(bounds.width - self.width, bounds.height - self.width);
         let radius = (self.radius - inset).clamp(0.0, size.width.min(size.height) / 2.0);
         let outline = Path::rounded_rectangle(iced::Point::new(inset, inset), size, radius.into());
-        let gradient = Linear::new(
-            iced::Point::ORIGIN,
-            iced::Point::new(bounds.width, bounds.height),
-        )
-        .add_stop(self.stops[0].0, self.stops[0].1)
-        .add_stop(self.stops[1].0, self.stops[1].1);
+        // The same start and end points iced uses for a background at this angle
+        let (from, to) = iced::Radians(self.angle.to_radians())
+            .to_distance(&iced::Rectangle::new(iced::Point::ORIGIN, bounds.size()));
+        let gradient = Linear::new(from, to)
+            .add_stop(self.stops[0].0, self.stops[0].1)
+            .add_stop(self.stops[1].0, self.stops[1].1);
         frame.stroke(
             &outline,
             widget::canvas::Stroke {
@@ -1355,7 +1334,6 @@ fn typewriter_line<'a, M: 'a>(
     fade_duration: f32,
     theme: &Theme,
     width: f32,
-    position: OverlayPosition,
     icon_style: IconStyle,
 ) -> Element<'a, M> {
     let font_size = font_size_for_key(key_size);
@@ -1437,11 +1415,11 @@ fn typewriter_line<'a, M: 'a>(
                     ..text_color
                 }))
                 .into(),
-            LinePiece::Key(k) => widget::container(keystroke_widget(
-                k, small_key, opacity, theme, position, icon_style,
-            ))
-            .padding([0.0, key_margin])
-            .into(),
+            LinePiece::Key(k) => {
+                widget::container(keystroke_widget(k, small_key, opacity, theme, icon_style))
+                    .padding([0.0, key_margin])
+                    .into()
+            }
         };
         children.push(if shown < 1.0 {
             Reveal::new(element, shown, true).into()
@@ -1458,11 +1436,12 @@ fn typewriter_line<'a, M: 'a>(
     let line: Element<'a, M> = match visibility {
         // Just around the text, up to the line's width
         Some(RailVisibility::Grow) => Reveal::new(row, 1.0, true).max_width(width).into(),
-        // The full line
-        _ => row
+        // The full line. The text is laid out at its natural width and clipped at
+        // the old end, so when typing outruns the line the newest text still shows
+        // (a width-limited row would squeeze the newest pieces away instead).
+        _ => widget::container(Reveal::new(row, 1.0, true).max_width(width))
             .width(Length::Fixed(width))
             .align_x(iced::alignment::Horizontal::Right)
-            .clip(true)
             .into(),
     };
 

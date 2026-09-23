@@ -110,22 +110,6 @@ pub fn settings_view(app: &KiwiApp) -> Element<'_, Message> {
                 .push(preview_background_toggle(config.preview_background)),
         )
         .push(theme_grid);
-    // Where the selected theme's artwork comes from
-    let credits = app
-        .themes
-        .iter()
-        .find(|(choice, _)| *choice == current)
-        .map(|(_, theme)| theme.credits.as_slice())
-        .unwrap_or_default();
-    for credit in credits {
-        theme_section = theme_section.push(
-            widget::button::link(format!(
-                "{} by {} · {}",
-                credit.work, credit.author, credit.license
-            ))
-            .on_press(Message::LaunchUrl(credit.url.clone())),
-        );
-    }
     theme_section = theme_section.push(
         widget::Row::new()
             .push(widget::Space::new().width(Length::Fill))
@@ -148,7 +132,15 @@ pub fn settings_view(app: &KiwiApp) -> Element<'_, Message> {
     };
     let placement = settings::section().title("Position and size").add(
         settings::item::builder("Drag the keys anywhere on screen")
-            .description(format!("{:.0} px keys, {length}", config.key_size))
+            .description(format!(
+                "{:.0} px keys, {length}, growing {}",
+                config.key_size,
+                if config.grows_left() {
+                    "leftward"
+                } else {
+                    "rightward"
+                }
+            ))
             .control(
                 widget::button::suggested("Adjust on screen").on_press(Message::StartArranging),
             ),
@@ -439,9 +431,23 @@ fn theme_card(
             widget::tooltip::Position::Top,
         )
     };
-    let label = widget::Row::new()
+    let mut label = widget::Row::new()
         .align_y(Alignment::Center)
-        .push(widget::text::body(name).width(Length::Fill))
+        .push(widget::text::body(name).width(Length::Fill));
+    // Where the theme's artwork comes from, and its license
+    for credit in &theme.credits {
+        label = label.push(widget::tooltip(
+            widget::button::icon(widget::icon::from_name("help-about-symbolic"))
+                .extra_small()
+                .on_press(Message::LaunchUrl(credit.url.clone())),
+            widget::text::caption(format!(
+                "{} by {}, {}",
+                credit.work, credit.author, credit.license
+            )),
+            widget::tooltip::Position::Top,
+        ));
+    }
+    let label = label
         .push(action(
             "edit-symbolic",
             "Customize",

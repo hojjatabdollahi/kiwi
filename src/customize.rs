@@ -60,8 +60,8 @@ impl ColorField {
     fn stop(self, theme: &Theme, stop: usize) -> Option<Hex> {
         match (self.get(theme)?, stop) {
             (Fill::Solid(color), 0) => Some(color),
-            (Fill::Gradient(start, _), 0) => Some(start.color),
-            (Fill::Gradient(_, end), 1) => Some(end.color),
+            (Fill::Gradient(start, _, _), 0) => Some(start.color),
+            (Fill::Gradient(_, end, _), 1) => Some(end.color),
             _ => None,
         }
     }
@@ -69,8 +69,12 @@ impl ColorField {
     fn set_stop(self, theme: &mut Theme, stop: usize, color: Hex) -> bool {
         let fill = match (self.get(theme), stop) {
             // A new color keeps its spot along the gradient
-            (Some(Fill::Gradient(start, end)), 0) => Fill::Gradient(Stop { color, ..start }, end),
-            (Some(Fill::Gradient(start, end)), 1) => Fill::Gradient(start, Stop { color, ..end }),
+            (Some(Fill::Gradient(start, end, angle)), 0) => {
+                Fill::Gradient(Stop { color, ..start }, end, angle)
+            }
+            (Some(Fill::Gradient(start, end, angle)), 1) => {
+                Fill::Gradient(start, Stop { color, ..end }, angle)
+            }
             (_, 0) => Fill::Solid(color),
             _ => return false,
         };
@@ -171,6 +175,8 @@ pub enum CustomizeMessage {
     PickStop(usize),
     /// Move the start (0) or end (1) color along the gradient being picked, 0 to 1
     MoveStop(usize, f32),
+    /// Turn the gradient being picked to this angle, in degrees
+    SetAngle(f32),
     PickerChanged(Hsva),
     PickerHex(String),
     PickerDone,
@@ -416,7 +422,8 @@ impl KiwiApp {
                     return Task::none();
                 };
                 let field = picking.field;
-                let Some(Fill::Gradient(mut start, mut end)) = field.get(&draft.theme) else {
+                let Some(Fill::Gradient(mut start, mut end, angle)) = field.get(&draft.theme)
+                else {
                     return Task::none();
                 };
                 // The colors can meet (a hard edge) but not pass each other
@@ -426,7 +433,17 @@ impl KiwiApp {
                 } else {
                     end.at = Some(at.max(start_at));
                 }
-                field.set(&mut draft.theme, Some(Fill::Gradient(start, end)));
+                field.set(&mut draft.theme, Some(Fill::Gradient(start, end, angle)));
+            }
+            M::SetAngle(angle) => {
+                let Some(picking) = &draft.picking else {
+                    return Task::none();
+                };
+                let field = picking.field;
+                let Some(Fill::Gradient(start, end, _)) = field.get(&draft.theme) else {
+                    return Task::none();
+                };
+                field.set(&mut draft.theme, Some(Fill::Gradient(start, end, angle)));
             }
             M::PickerChanged(hsva) => {
                 let Some(picking) = &mut draft.picking else {
@@ -467,7 +484,7 @@ impl KiwiApp {
             M::ToggleGradient(field) => {
                 let fill = match field.get(&draft.theme) {
                     Some(Fill::Solid(color)) => Fill::gradient(color, color),
-                    Some(Fill::Gradient(start, _)) => Fill::Solid(start.color),
+                    Some(Fill::Gradient(start, _, _)) => Fill::Solid(start.color),
                     None => return Task::none(),
                 };
                 field.set(&mut draft.theme, Some(fill));
@@ -632,9 +649,9 @@ pub fn view<'a>(
         if let Some(fill) = fill {
             let (start, end) = match fill {
                 Fill::Solid(color) => (color.0, None),
-                Fill::Gradient(start, end) => (
+                Fill::Gradient(start, end, angle) => (
                     start.color.0,
-                    Some((end.color.0, theme::stop_positions(&start, &end))),
+                    Some((end.color.0, theme::stop_positions(&start, &end), angle)),
                 ),
             };
             let open = draft.picking.as_ref().is_some_and(|p| p.field == field);
@@ -678,14 +695,32 @@ pub fn view<'a>(
                     ),
             );
         }
-        if let Some(Fill::Gradient(start, end)) = field.get(theme) {
+        if let Some(Fill::Gradient(start, end, angle)) = field.get(theme) {
             let (start_at, end_at) = theme::stop_positions(&start, &end);
-            panel = panel.push(gradient_editor(
-                [(start_at, start.color.0), (end_at, end.color.0)],
-                picking.stop,
-                move |stop| send(CustomizeMessage::PickStop(stop)),
-                move |stop, at| send(CustomizeMessage::MoveStop(stop, at)),
-            ));
+            panel = panel
+                .push(gradient_editor(
+                    [(start_at, start.color.0), (end_at, end.color.0)],
+                    picking.stop,
+                    move |stop| send(CustomizeMessage::PickStop(stop)),
+                    move |stop, at| send(CustomizeMessage::MoveStop(stop, at)),
+                ))
+                .push(
+                    widget::Row::new()
+                        .spacing(12)
+                        .align_y(Alignment::Center)
+                        .push(widget::text::body("Angle"))
+                        .push(
+                            widget::slider(0.0..=359.0, angle, move |a| {
+                                send(CustomizeMessage::SetAngle(a.round()))
+                            })
+                            .width(Length::Fill),
+                        )
+                        .push(
+                            widget::text::body(format!("{angle:.0}°"))
+                                .width(Length::Fixed(40.0))
+                                .align_x(cosmic::iced::alignment::Horizontal::Right),
+                        ),
+                );
         }
         Some(
             panel
@@ -729,7 +764,7 @@ pub fn view<'a>(
     // A color row, with the picker under it while it's open
     let add_color =
         move |section: settings::Section<'a, Message>, label: &'static str, field: ColorField| {
-            let section = section.add(settings::item(label, chips(field)));
+            let section = section.add(settings::flex_item(label, chips(field)));
             match picker(field) {
                 Some(picker) => section.add(picker),
                 None => section,
@@ -738,7 +773,7 @@ pub fn view<'a>(
     // Border color, then border width on its own row (two gradient chips leave no room)
     let add_border =
         move |section: settings::Section<'a, Message>, field: ColorField, width: NumberField| {
-            let section = section.add(settings::item("Border", chips(field)));
+            let section = section.add(settings::flex_item("Border", chips(field)));
             let section = match picker(field) {
                 Some(picker) => section.add(picker),
                 None => section,
@@ -748,7 +783,7 @@ pub fn view<'a>(
 
     let layout = settings::section()
         .title("Layout")
-        .add(settings::item(
+        .add(settings::flex_item(
             "Show",
             widget::segmented_control::horizontal(&draft.layout_model)
                 .on_activate(move |e| send(CustomizeMessage::LayoutTab(e)))
@@ -795,15 +830,12 @@ pub fn view<'a>(
                 number(NumberField::RailRadius),
             ))
             .add(settings::item("Padding", number(NumberField::RailPadding)))
-            .add(
-                settings::item::builder("Show the rail")
-                    .description("Always, at full length while keys show, or just around the keys")
-                    .control(
-                        widget::segmented_control::horizontal(&draft.rail_visibility_model)
-                            .on_activate(move |e| send(CustomizeMessage::RailVisibilityTab(e)))
-                            .width(Length::Shrink),
-                    ),
-            );
+            .add(settings::flex_item(
+                "Show the rail",
+                widget::segmented_control::horizontal(&draft.rail_visibility_model)
+                    .on_activate(move |e| send(CustomizeMessage::RailVisibilityTab(e)))
+                    .width(Length::Shrink),
+            ));
         rail = add_color(rail, "Divider between keys", ColorField::RailDivider);
     } else {
         rail = rail.add(widget::text::caption(
@@ -815,7 +847,7 @@ pub fn view<'a>(
     keys = add_color(keys, "Background", ColorField::KeyBackground);
     keys = add_color(keys, "While held", ColorField::KeyPressed);
     keys = add_color(keys, "Text", ColorField::KeyText);
-    keys = keys.add(settings::item(
+    keys = keys.add(settings::flex_item(
         "Font",
         widget::button::standard(format!("{} ▾", theme.font.as_deref().unwrap_or(KIWI_FONT)))
             .on_press(send(CustomizeMessage::ToggleFontPicker)),
@@ -833,13 +865,13 @@ pub fn view<'a>(
             "Gap between keys",
             number(NumberField::KeyGap),
         ))
-        .add(settings::item(
+        .add(settings::flex_item(
             "Repeats",
             widget::segmented_control::horizontal(&draft.repeats_model)
                 .on_activate(move |e| send(CustomizeMessage::RepeatsTab(e)))
                 .width(Length::Shrink),
         ))
-        .add(settings::item(
+        .add(settings::flex_item(
             "Expired keys",
             widget::segmented_control::horizontal(&draft.expiry_model)
                 .on_activate(move |e| send(CustomizeMessage::ExpiryTab(e)))
@@ -932,43 +964,57 @@ pub fn view<'a>(
 
     let own_theme = matches!(draft.base, ThemeChoice::User(_));
     let footer: Element<'a, Message> = if draft.naming {
-        widget::Row::new()
+        widget::Column::new()
             .spacing(8)
-            .align_y(Alignment::Center)
             .push(
                 widget::text_input("Theme name", &draft.save_name)
                     .on_input(move |name| send(CustomizeMessage::SetSaveName(name)))
                     .on_submit(move |_| send(CustomizeMessage::Save))
                     .width(Length::Fill),
             )
-            .push(widget::button::standard("Cancel").on_press(send(CustomizeMessage::StopNaming)))
-            .push(widget::button::suggested("Save").on_press(send(CustomizeMessage::Save)))
+            .push(
+                widget::Row::new()
+                    .spacing(8)
+                    .push(widget::Space::new().width(Length::Fill))
+                    .push(
+                        widget::button::standard("Cancel")
+                            .on_press(send(CustomizeMessage::StopNaming)),
+                    )
+                    .push(widget::button::suggested("Save").on_press(send(CustomizeMessage::Save))),
+            )
             .into()
     } else {
-        let mut row = widget::Row::new()
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .push(
-                widget::button::text("Discard changes")
-                    .on_press_maybe(draft.edited.then(|| send(CustomizeMessage::Discard))),
-            )
-            .push(widget::Space::new().width(Length::Fill))
-            .push(widget::button::standard("Export…").on_press(Message::ExportTheme));
-        row = if own_theme {
-            row.push(
-                widget::button::standard("Save as…").on_press(send(CustomizeMessage::StartNaming)),
-            )
-            .push(
+        // The buttons wrap onto a second line when the drawer is narrow
+        let mut buttons: Vec<Element<'a, Message>> = vec![
+            widget::button::text("Discard changes")
+                .on_press_maybe(draft.edited.then(|| send(CustomizeMessage::Discard)))
+                .into(),
+            widget::button::standard("Export…")
+                .on_press(Message::ExportTheme)
+                .into(),
+        ];
+        if own_theme {
+            buttons.push(
+                widget::button::standard("Save as…")
+                    .on_press(send(CustomizeMessage::StartNaming))
+                    .into(),
+            );
+            buttons.push(
                 widget::button::suggested("Save")
-                    .on_press_maybe(draft.edited.then(|| send(CustomizeMessage::SaveInPlace))),
-            )
+                    .on_press_maybe(draft.edited.then(|| send(CustomizeMessage::SaveInPlace)))
+                    .into(),
+            );
         } else {
-            row.push(
+            buttons.push(
                 widget::button::suggested("Save as theme…")
-                    .on_press(send(CustomizeMessage::StartNaming)),
-            )
-        };
-        row.into()
+                    .on_press(send(CustomizeMessage::StartNaming))
+                    .into(),
+            );
+        }
+        widget::flex_row(buttons)
+            .spacing(8)
+            .justify_items(Alignment::End)
+            .into()
     };
 
     (content.into(), footer)
@@ -1119,22 +1165,26 @@ mod tests {
         let mut theme = Theme::builtin(BuiltinTheme::Frosted);
         let red = Hex::parse("#ff0000").unwrap();
         let (start, _) = match theme.key.background {
-            Fill::Gradient(start, end) => (start, end),
+            Fill::Gradient(start, end, _) => (start, end),
             Fill::Solid(_) => panic!("Frosted keys have a gradient"),
         };
         assert!(ColorField::KeyBackground.set_stop(&mut theme, 1, red));
-        assert_eq!(theme.key.background, Fill::Gradient(start, Stop::new(red)));
+        let angle = crate::theme::DEFAULT_GRADIENT_ANGLE;
+        assert_eq!(
+            theme.key.background,
+            Fill::Gradient(start, Stop::new(red), angle)
+        );
         // A new color keeps its spot along the gradient
         let end = Stop {
             color: red,
             at: Some(0.6),
         };
-        theme.key.background = Fill::Gradient(start, end);
+        theme.key.background = Fill::Gradient(start, end, angle);
         let blue = Hex::parse("#0000ff").unwrap();
         assert!(ColorField::KeyBackground.set_stop(&mut theme, 1, blue));
         assert_eq!(
             theme.key.background,
-            Fill::Gradient(start, Stop { color: blue, ..end })
+            Fill::Gradient(start, Stop { color: blue, ..end }, angle)
         );
         // Solid fields have no second stop
         assert!(!ColorField::KeyText.set_stop(&mut theme, 1, red));

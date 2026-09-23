@@ -49,10 +49,11 @@ pub fn stepper<'a, M: Clone + 'static>(
 
 /// A pill showing a color or a gradient and its hex codes: a round swatch and
 /// "#ffffff38" for one color, a gradient swatch and "#4d5973b8 → #33405966" for a
-/// gradient. `end` is the gradient's end color and where its two colors sit (0-1).
+/// gradient. `end` is the gradient's end color, where its two colors sit (0-1)
+/// and its angle in degrees.
 pub fn fill_chip<'a, M: Clone + 'static>(
     start: Color,
-    end: Option<(Color, (f32, f32))>,
+    end: Option<(Color, (f32, f32), f32)>,
     selected: bool,
     on_press: M,
 ) -> Element<'a, M> {
@@ -76,11 +77,12 @@ pub fn fill_chip<'a, M: Clone + 'static>(
             ),
             hex(start),
         ),
-        Some((end, (start_at, end_at))) => (
+        Some((end, (start_at, end_at), angle)) => (
             on_checkers(
                 36.0,
                 widget::Canvas::new(GradientSwatch {
                     stops: [(start_at, start), (end_at, end)],
+                    angle,
                 })
                 .width(Length::Fixed(36.0))
                 .height(Length::Fixed(20.0))
@@ -128,6 +130,8 @@ fn checkered_pill<'a, M: 'a>(width: f32, height: f32) -> Element<'a, M> {
 struct GradientSwatch {
     /// The two colors and where they sit, from 0 to 1
     stops: [(f32, Color); 2],
+    /// The gradient's angle in degrees
+    angle: f32,
 }
 
 impl<M> canvas::Program<M, cosmic::Theme> for GradientSwatch {
@@ -151,7 +155,9 @@ impl<M> canvas::Program<M, cosmic::Theme> for GradientSwatch {
             Size::new(bounds.width - 2.0, bounds.height - 2.0),
             radius.into(),
         );
-        let gradient = Linear::new(Point::ORIGIN, Point::new(bounds.width, 0.0))
+        let (from, to) = cosmic::iced::Radians(self.angle.to_radians())
+            .to_distance(&Rectangle::new(Point::ORIGIN, bounds.size()));
+        let gradient = Linear::new(from, to)
             .add_stop(self.stops[0].0, self.stops[0].1)
             .add_stop(self.stops[1].0, self.stops[1].1);
         frame.fill(&pill, gradient);

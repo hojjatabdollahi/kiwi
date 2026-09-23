@@ -125,7 +125,12 @@ impl SharedState {
             self.theme_choice = theme_choice;
         }
         self.anchor = config.anchor();
-        self.position = OverlayPosition::from_anchor(self.anchor);
+        // Which way the keys grow; top or bottom makes no difference to them
+        self.position = if config.grows_left() {
+            OverlayPosition::TopRight
+        } else {
+            OverlayPosition::TopLeft
+        };
         self.line_width = config.line_width;
         self.key_display_mode = config.key_display_mode;
         self.icon_style = config.icon_style;
@@ -649,9 +654,10 @@ pub fn view_overlay(
         return cosmic::widget::Space::new().into();
     };
 
-    // The keys grow from the anchor toward the middle of the screen
+    // The keys grow from the anchor, leftward or rightward as set in arrange mode
     let (ax, ay) = frame.anchor;
-    let (on_right, on_bottom) = (ax > 0.5, ay > 0.5);
+    let on_right = frame.position == OverlayPosition::TopRight;
+    let on_bottom = ay > 0.5;
     let h_align = if on_right {
         Horizontal::Right
     } else {
@@ -708,26 +714,16 @@ pub fn view_overlay(
             )
     };
     let row = row.width(Fill);
-    let keystroke_layer: cosmic::Element<'static, Message> = if on_bottom {
-        Column::new()
-            .push(
-                container(row)
-                    .height(FillPortion(share(ay)))
-                    .align_y(v_align),
-            )
-            .push(Space::new().height(FillPortion(share(1.0 - ay))))
-    } else {
-        Column::new()
-            .push(Space::new().height(FillPortion(share(ay))))
-            .push(
-                container(row)
-                    .height(FillPortion(share(1.0 - ay)))
-                    .align_y(v_align),
-            )
-    }
-    .width(Fill)
-    .height(Fill)
-    .into();
+    // Vertically the anchor is a share of the free space above and below the
+    // keys, so they can go anywhere from the top edge to the bottom edge and
+    // never off screen
+    let keystroke_layer: cosmic::Element<'static, Message> = Column::new()
+        .push(Space::new().height(FillPortion(share(ay))))
+        .push(row)
+        .push(Space::new().height(FillPortion(share(1.0 - ay))))
+        .width(Fill)
+        .height(Fill)
+        .into();
 
     if frame.arranging {
         let spots = cosmic::widget::Canvas::new(ArrangeCanvas {
@@ -920,8 +916,8 @@ fn arranging_keys(
     .into()
 }
 
-/// The arrange toolbar: a compact pill with size, length and edge distance,
-/// Reset and Done, with the ways out written underneath
+/// The arrange toolbar: a compact pill with size, length and which way the keys
+/// grow, Reset and Done, with the ways out written underneath
 fn arrange_toolbar(frame: &Snapshot) -> cosmic::Element<'static, Message> {
     use crate::widgets::stepper;
     use cosmic::widget;
@@ -960,6 +956,16 @@ fn arrange_toolbar(frame: &Snapshot) -> cosmic::Element<'static, Message> {
                 96.0,
                 Some(Message::NudgeLength(-1)),
                 Some(Message::NudgeLength(1)),
+            ))
+            .push(widget::tooltip(
+                widget::button::icon(widget::icon::from_name("object-flip-horizontal-symbolic"))
+                    .on_press(Message::FlipGrowth),
+                if frame.position == OverlayPosition::TopRight {
+                    "Keys grow to the left. Flip to grow to the right."
+                } else {
+                    "Keys grow to the right. Flip to grow to the left."
+                },
+                widget::tooltip::Position::Top,
             ))
             .push(divider())
             .push(widget::button::standard("Reset").on_press(Message::ResetArrangement))
