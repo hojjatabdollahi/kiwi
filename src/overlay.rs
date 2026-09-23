@@ -73,13 +73,14 @@ pub struct SharedState {
     pub preview: Option<Preview>,
     /// How far the keys have been dragged from their spot, while arranging
     pub drag_offset: Option<cosmic::iced::Vector>,
-    /// How many keys were beside the slot last frame, to notice one joining
+    /// Last frame: how many finished keystrokes were showing, whether a held
+    /// keystroke was showing after them, and how many keys that held one had
     row_len: usize,
-    /// When a key last left the slot for the row, which starts the slide
+    was_held: bool,
+    held_parts: usize,
+    /// When a new keystroke last appeared at the edge, which starts the slide
     shifted_at: Option<std::time::Instant>,
-    /// How many keys the slot's keystroke had last frame, to notice it growing
-    slot_parts: usize,
-    /// When the held combination in the slot grew, and how many keys it had before
+    /// When the held combination grew, and how many keys it had before
     slot_grew: Option<(std::time::Instant, usize)>,
     /// Key display mode (typed character vs physical key)
     pub key_display_mode: crate::config::KeyDisplayMode,
@@ -224,8 +225,9 @@ impl Default for SharedState {
             preview: None,
             drag_offset: None,
             row_len: 0,
+            was_held: false,
+            held_parts: 0,
             shifted_at: None,
-            slot_parts: 0,
             slot_grew: None,
             key_display_mode: crate::config::KeyDisplayMode::default(),
             icon_style: IconStyle::default(),
@@ -412,34 +414,45 @@ impl Snapshot {
             Some(preview) if !s.arranging => preview.theme.clone(),
             _ => s.theme.clone(),
         };
-        let keystrokes = if s.arranging {
-            sample_keystrokes(s.theme.layout)
+        let (keystrokes, held) = if s.arranging {
+            (sample_keystrokes(s.theme.layout), false)
         } else if let Some(preview) = &s.preview {
-            preview.keystrokes()
+            (preview.keystrokes(), false)
         } else if s.enabled {
             live_keystrokes(s)
         } else {
-            Vec::new()
+            (Vec::new(), false)
         };
-        // A key joining the row (the slot moved on to a new keystroke) starts the slide
+
+        // A new keystroke at the edge starts the slide: a new press (or a new key
+        // pressed while the last is still held), or a finished keystroke that
+        // arrived without being held first (a scroll, a gesture). Releasing a held
+        // key doesn't: it stays right where it was, now finished.
         let fade_duration = s.fade_duration;
-        let visible: Vec<&Keystroke> = keystrokes
+        let visible = keystrokes
             .iter()
             .filter(|k| !k.is_expired(fade_duration))
-            .collect();
-        let row_len = visible.len().saturating_sub(1);
-        let slot_parts = visible.last().map_or(0, |k| k.keys.len());
+            .count();
+        let row_len = visible - usize::from(held && visible > 0);
+        let held_parts = if held {
+            keystrokes.last().map_or(0, |k| k.keys.len())
+        } else {
+            0
+        };
         let now = std::time::Instant::now();
-        if row_len > s.row_len {
+        let new_press = held && (!s.was_held || row_len > s.row_len);
+        let arrived = !held && !s.was_held && row_len > s.row_len;
+        if new_press || arrived {
             s.shifted_at = Some(now);
-            // A fresh keystroke in the slot appears as it is, without growing
+            // A fresh keystroke appears as it is, without growing
             s.slot_grew = None;
-        } else if slot_parts > s.slot_parts && s.slot_parts > 0 {
+        } else if held && s.was_held && held_parts > s.held_parts {
             // The held combination gained a key (Ctrl, then Ctrl + Shift…)
-            s.slot_grew = Some((now, s.slot_parts));
+            s.slot_grew = Some((now, s.held_parts));
         }
         s.row_len = row_len;
-        s.slot_parts = slot_parts;
+        s.was_held = held;
+        s.held_parts = held_parts;
 
         let touches = if s.enabled && s.show_touch && show_touches {
             s.touches.clone()
@@ -467,9 +480,11 @@ impl Snapshot {
     }
 }
 
-/// The history plus whatever is held down right now
-fn live_keystrokes(s: &SharedState) -> Vec<Keystroke> {
+/// The history plus whatever is held down right now, and whether the last
+/// keystroke is a held one (rather than a finished one from the history)
+fn live_keystrokes(s: &SharedState) -> (Vec<Keystroke>, bool) {
     let mut display: Vec<Keystroke> = s.history.clone();
+    let history_len = display.len();
 
     // Build current "pressed" keystroke from state
     // Priority: mouse action > key > modifiers-only
@@ -494,8 +509,8 @@ fn live_keystrokes(s: &SharedState) -> Vec<Keystroke> {
         } else {
             Keystroke::single(key.clone(), true)
         };
-        // Pressing the same key again quickly counts up in the slot (it merges on
-        // release) instead of pushing the last one into the row
+        // Pressing the same key again quickly counts up on the last keystroke (it
+        // merges on release) instead of adding another
         match display.last_mut() {
             Some(last) if last.can_merge(&current) => {
                 last.pressed = true;
@@ -506,11 +521,16 @@ fn live_keystrokes(s: &SharedState) -> Vec<Keystroke> {
     } else if s.modifiers.any() && !s.key_pressed_with_modifiers {
         // Only modifiers pressed (no key, no mouse). Once a key was pressed with
         // them, the finished combination stays in the slot instead.
-        if let Some(mods_keystroke) = Keystroke::from_modifiers(&s.modifiers, true) {
-            display.push(mods_keystroke);
+        //
+        // Show every modifier held so far, so letting go of one (Ctrl, while Shift
+        // is still down) leaves its place empty instead of shifting the rest
+        if let Some(mut held) = Keystroke::from_modifiers(&s.peak_modifiers, true) {
+            held.released_parts = released_modifiers(&s.peak_modifiers, &s.modifiers);
+            display.push(held);
         }
     }
-    display
+    let held = display.len() > history_len;
+    (display, held)
 }
 
 /// A theme preview: a short scripted bit of typing played on the overlay
@@ -557,6 +577,7 @@ impl Preview {
                 pressed: elapsed - at < PREVIEW_PRESS_MS,
                 timestamp: self.started + std::time::Duration::from_millis(*at),
                 count: *count,
+                released_parts: 0,
             })
             .collect()
     }
@@ -566,6 +587,28 @@ impl Preview {
         let last = PREVIEW_SCRIPT.last().map_or(0, |(at, ..)| *at);
         self.started.elapsed().as_secs_f32() > last as f32 / 1000.0 + fade_duration
     }
+}
+
+/// Which of the `peak` modifiers are no longer held, one bit per key in the order
+/// `KeyModifiers::to_parts` lists them
+fn released_modifiers(peak: &KeyModifiers, held: &KeyModifiers) -> u8 {
+    let pairs = [
+        (peak.super_key, held.super_key),
+        (peak.ctrl, held.ctrl),
+        (peak.alt, held.alt),
+        (peak.shift, held.shift),
+    ];
+    let mut mask = 0;
+    let mut part = 0;
+    for (was_held, still_held) in pairs {
+        if was_held {
+            if !still_held {
+                mask |= 1 << part;
+            }
+            part += 1;
+        }
+    }
+    mask
 }
 
 /// What arrange mode shows in place of real input
@@ -1117,25 +1160,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_key_joining_the_row_starts_the_slide() {
+    fn a_new_press_slides_in_but_letting_go_does_not() {
         let mut state = SharedState::default();
         state.history.push(Keystroke::single("a", false));
         Snapshot::take(&mut state, false);
-        // One key: it's in the slot, nothing has slid yet
-        assert!(state.shifted_at.is_none());
+        state.shifted_at = None;
 
-        // Pressing the next key pushes "a" out of the slot into the row
+        // Pressing "b" opens room at the edge for it
         state.current_key = Some(("b".into(), KeyModifiers::default()));
         let frame = Snapshot::take(&mut state, false);
         assert_eq!(frame.keystrokes.len(), 2);
         assert!(state.shifted_at.is_some());
 
-        // Releasing "b" moves it from held to history: same keys on screen, no new slide
+        // Letting go of "b" finishes it where it is: nothing moves
         state.shifted_at = None;
         state.current_key = None;
         state.history.push(Keystroke::single("b", false));
         Snapshot::take(&mut state, false);
         assert!(state.shifted_at.is_none());
+
+        // Pressing "c" while "b" is still held (rollover) also slides in
+        state.current_key = Some(("c".into(), KeyModifiers::default()));
+        Snapshot::take(&mut state, false);
+        state.shifted_at = None;
+        state.history.push(Keystroke::single("c", false));
+        state.current_key = Some(("d".into(), KeyModifiers::default()));
+        Snapshot::take(&mut state, false);
+        assert!(state.shifted_at.is_some());
+    }
+
+    #[test]
+    fn a_key_arriving_without_being_held_slides_in() {
+        let mut state = SharedState::default();
+        state.history.push(Keystroke::single("a", false));
+        Snapshot::take(&mut state, false);
+        // A scroll goes straight into the history
+        state.history.push(Keystroke::single("ScrollUp", false));
+        Snapshot::take(&mut state, false);
+        assert!(state.shifted_at.is_some());
     }
 
     #[test]
@@ -1146,14 +1208,42 @@ mod tests {
 
         // Holding Ctrl: a fresh keystroke in the slot, which doesn't grow
         state.modifiers.ctrl = true;
+        state.peak_modifiers.ctrl = true;
         Snapshot::take(&mut state, false);
         assert!(state.slot_grew.is_none());
 
         // Adding Shift grows the held combination from one key to two
         state.modifiers.shift = true;
+        state.peak_modifiers.shift = true;
         let frame = Snapshot::take(&mut state, false);
         assert_eq!(state.slot_grew.map(|(_, from)| from), Some(1));
         assert_eq!(frame.motion.slot_grew.map(|(_, from)| from), Some(1));
+    }
+
+    #[test]
+    fn letting_go_of_one_modifier_keeps_the_others_in_place() {
+        let mut state = SharedState::default();
+        // Ctrl and Shift held, then Ctrl let go
+        state.peak_modifiers.ctrl = true;
+        state.peak_modifiers.shift = true;
+        state.modifiers.shift = true;
+        let (keys, _) = live_keystrokes(&state);
+        let held = keys.last().unwrap();
+        assert_eq!(held.keys, ["Ctrl", "⇧"]);
+        // Ctrl (the first key) is drawn as empty space; Shift stays where it was
+        assert_eq!(held.released_parts, 0b01);
+
+        let peak = KeyModifiers {
+            super_key: true,
+            ctrl: true,
+            alt: true,
+            shift: true,
+        };
+        let only_alt = KeyModifiers {
+            alt: true,
+            ..Default::default()
+        };
+        assert_eq!(released_modifiers(&peak, &only_alt), 0b1011);
     }
 
     #[test]
@@ -1161,8 +1251,10 @@ mod tests {
         let mut state = SharedState::default();
         state.history.push(Keystroke::single("a", false));
         state.current_key = Some(("a".into(), KeyModifiers::default()));
-        let keys = live_keystrokes(&state);
+        let (keys, held) = live_keystrokes(&state);
         assert_eq!(keys.len(), 1);
+        // The repeat counts up on the finished keystroke; nothing new is held
+        assert!(!held);
         assert!(keys[0].pressed);
         assert_eq!(keys[0].count, 2);
     }
@@ -1171,12 +1263,13 @@ mod tests {
     fn held_modifiers_after_a_combination_keep_it_in_the_slot() {
         let mut state = SharedState::default();
         state.modifiers.ctrl = true;
+        state.peak_modifiers.ctrl = true;
         state.history.push(Keystroke::single("C", false));
         // Ctrl is still held, but a key was already pressed with it
         state.key_pressed_with_modifiers = true;
-        assert_eq!(live_keystrokes(&state).len(), 1);
+        assert_eq!(live_keystrokes(&state).0.len(), 1);
         state.key_pressed_with_modifiers = false;
-        assert_eq!(live_keystrokes(&state).len(), 2);
+        assert_eq!(live_keystrokes(&state).0.len(), 2);
     }
 
     #[test]

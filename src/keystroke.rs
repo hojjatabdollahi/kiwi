@@ -116,6 +116,9 @@ pub struct Keystroke {
     pub timestamp: Instant,
     /// Number of times this keystroke was repeated
     pub count: u32,
+    /// Keys of a held combination that were already let go, one bit per key
+    /// (bit 0 is the first). They're drawn as empty space so nothing shifts.
+    pub released_parts: u8,
 }
 
 /// Active modifier keys for a keystroke
@@ -162,6 +165,7 @@ impl KeyModifiers {
                 pressed,
                 timestamp: Instant::now(),
                 count: 1,
+                released_parts: 0,
             })
         }
     }
@@ -175,6 +179,7 @@ impl Keystroke {
             pressed,
             timestamp: Instant::now(),
             count: 1,
+            released_parts: 0,
         }
     }
 
@@ -187,6 +192,7 @@ impl Keystroke {
             pressed,
             timestamp: Instant::now(),
             count: 1,
+            released_parts: 0,
         }
     }
 
@@ -659,8 +665,12 @@ fn keystroke_widget<'a, M: 'a>(
 
     // Each key is a key_size square; combinations put a "+" between them
     let mut parts: Vec<Element<'a, M>> = Vec::new();
+    let released = |i: usize| i < 8 && keystroke.released_parts & (1 << i) != 0;
     for (i, key) in keystroke.keys.iter().enumerate() {
-        if i > 0 {
+        // Keys already let go leave their space empty, and so does the "+" beside them
+        if i > 0 && (released(i) || released(i - 1)) {
+            parts.push(widget::Space::new().width(Length::Fixed(PLUS_WIDTH)).into());
+        } else if i > 0 {
             // Add "+" separator (fixed width, centered)
             parts.push(
                 widget::container(
@@ -676,6 +686,10 @@ fn keystroke_widget<'a, M: 'a>(
                 .align_y(iced::alignment::Vertical::Center)
                 .into(),
             );
+        }
+        if released(i) {
+            parts.push(widget::Space::new().width(Length::Fixed(key_size)).into());
+            continue;
         }
         // Centered content: text or icon, plus the emblem if pressed
         parts.push(
@@ -778,13 +792,14 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         );
     }
 
-    // The newest keystroke sits in the slot at the edge, where it builds up while
-    // held; older ones form the row beside it
+    // Keys run inward from the screen edge, newest at the edge. A held key sits
+    // there while it builds up and stays in the same place once it's let go.
+    // Keys only ever move away from the edge, or go away.
     let visible: Vec<&Keystroke> = keystrokes
         .iter()
         .filter(|k| !k.is_expired(fade_duration))
         .collect();
-    let Some((slot, older)) = visible.split_last() else {
+    let Some(newest) = visible.last() else {
         return widget::Space::new().into();
     };
 
@@ -794,9 +809,9 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         .map(|k| k.opacity(fade_duration))
         .fold(0.0, f32::max);
 
-    // Right-side and centered positions keep the slot on the right, and the row
-    // grows leftward; left-side positions mirror that
-    let slot_on_right = matches!(
+    // Right-side and centered positions have the edge on the right, and the keys
+    // run leftward; left-side positions mirror that
+    let edge_on_right = matches!(
         position,
         OverlayPosition::TopRight
             | OverlayPosition::BottomRight
@@ -807,37 +822,28 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     let (opening, arriving) = slide_phases(motion.shifted_at);
     // The row shows this much, measured in single keys; older keys slide out past
     // its far edge, fading as they cross it
-    let window = history_count.saturating_sub(1) as f32 * (key_size + gap);
+    let window = history_count as f32 * (key_size + gap);
 
-    // A key taking up `width` (0-1) of its room, drawn at `dim` opacity and nudged
-    // toward the slot by `nudge` of its width. Row keys carry their gap on the slot
-    // side, so the gap moves with them.
-    let key = |k: &Keystroke, width: f32, dim: f32, nudge: f32, gap: f32| -> Element<'a, M> {
-        let opacity = k.opacity(fade_duration) * dim;
-        let widget = keystroke_widget(k, key_size, opacity, theme, position, icon_style);
-        let padding = if slot_on_right {
-            [0.0, gap, 0.0, 0.0]
-        } else {
-            [0.0, 0.0, 0.0, gap]
-        };
-        let widget: Element<'a, M> = widget::container(widget).padding(padding).into();
-        if width >= 1.0 && nudge == 0.0 {
-            widget
-        } else {
-            Reveal::new(widget, width, slot_on_right)
-                .nudge(nudge)
-                .into()
+    // While the held combination grows (Ctrl, then Ctrl + Shift…), the newest key
+    // widens smoothly: its keys glide inward and the new one slides in from the edge
+    let grown = match motion.slot_grew {
+        Some((at, from_parts)) if from_parts < newest.keys.len() => {
+            let t = (at.elapsed().as_secs_f32() / SLOT_GROW_SECS).min(1.0);
+            let eased = 1.0 - (1.0 - t).powi(3);
+            let from = parts_width(from_parts, key_size) / parts_width(newest.keys.len(), key_size);
+            from + (1.0 - from) * eased
         }
+        _ => 1.0,
     };
 
-    // Row keys, newest first. The newest one arrives in two steps: first the row
-    // slides over to open room for it, then it glides into that room from the slot
-    // side. Keys about to expire close up at a steady speed, so a wide combination
-    // takes as long as its width needs.
-    let mut row: Vec<Element<'a, M>> = Vec::new();
-    // How far the next key starts from the slot (estimated)
+    // Newest first. A new keystroke arrives in two steps: first the others slide
+    // inward to open room at the edge, then it glides into that room from the edge.
+    // Keys about to expire close up at a steady speed, so a wide combination takes
+    // as long as its width needs.
+    let mut children: Vec<Element<'a, M>> = Vec::new();
+    // How far the next key starts from the edge (estimated)
     let mut distance = 0.0;
-    for (i, k) in older.iter().rev().enumerate() {
+    for (i, k) in visible.iter().rev().enumerate() {
         if distance >= window {
             break;
         }
@@ -853,40 +859,31 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
         let room = (key_width(k, key_size, theme) + gap) * width;
         // Fade out as the key crosses the far edge of the window
         let inside = ((window - distance) / room).clamp(0.0, 1.0);
-        row.push(key(k, width, dim * inside, nudge, gap));
-        distance += room;
-    }
-    if slot_on_right {
-        row.reverse();
-    }
+        let opacity = k.opacity(fade_duration) * dim * inside;
 
-    // While the held combination grows (Ctrl, then Ctrl + Shift…), the slot widens
-    // smoothly: its keys glide over and the new one slides in from the screen edge
-    let slot_width = match motion.slot_grew {
-        Some((at, from_parts)) if from_parts < slot.keys.len() => {
-            let t = (at.elapsed().as_secs_f32() / SLOT_GROW_SECS).min(1.0);
-            let eased = 1.0 - (1.0 - t).powi(3);
-            let from = parts_width(from_parts, key_size) / parts_width(slot.keys.len(), key_size);
-            from + (1.0 - from) * eased
+        let mut widget = keystroke_widget(k, key_size, opacity, theme, position, icon_style);
+        if i == 0 && grown < 1.0 {
+            widget = Reveal::new(widget, grown, false).into();
         }
-        _ => 1.0,
-    };
-    let slot_width = slot_width.min(leaving(slot, fade_duration));
-    let slot: Element<'a, M> = {
-        let widget = keystroke_widget(
-            slot,
-            key_size,
-            slot.opacity(fade_duration),
-            theme,
-            position,
-            icon_style,
-        );
-        if slot_width >= 1.0 {
+        // The gap goes on the far side, so the newest key sits right at the edge
+        let padding = if edge_on_right {
+            [0.0, 0.0, 0.0, gap]
+        } else {
+            [0.0, gap, 0.0, 0.0]
+        };
+        let widget: Element<'a, M> = widget::container(widget).padding(padding).into();
+        children.push(if width >= 1.0 && nudge == 0.0 {
             widget
         } else {
-            Reveal::new(widget, slot_width, false).into()
-        }
-    };
+            Reveal::new(widget, width, edge_on_right)
+                .nudge(nudge)
+                .into()
+        });
+        distance += room;
+    }
+    if edge_on_right {
+        children.reverse();
+    }
 
     let is_bottom = matches!(
         position,
@@ -899,79 +896,61 @@ pub fn keystrokes_row<'a, M: 'a + Clone>(
     };
 
     // Thin lines between keys, if the theme draws them
-    let divider = theme.rail.and_then(|rail| rail.divider).map(|color| {
-        let color = Color {
-            a: color.0.a * rail_opacity,
-            ..color.0
-        };
-        move || -> Element<'a, M> {
-            widget::container(widget::Space::new())
-                .width(Length::Fixed(1.0))
-                .height(Length::Fixed(key_size))
-                .class(cosmic::theme::Container::custom(move |_| {
-                    container::Style {
-                        background: Some(Background::Color(color)),
-                        ..Default::default()
-                    }
-                }))
-                .into()
-        }
-    });
-    let join = |children: Vec<Element<'a, M>>| -> Vec<Element<'a, M>> {
-        match divider {
-            None => children,
-            Some(divider) => {
-                let mut joined = Vec::new();
-                for (i, child) in children.into_iter().enumerate() {
-                    if i > 0 {
-                        joined.push(divider());
-                    }
-                    joined.push(child);
+    let children = match theme.rail.and_then(|rail| rail.divider) {
+        None => children,
+        Some(color) => {
+            let color = Color {
+                a: color.0.a * rail_opacity,
+                ..color.0
+            };
+            let mut joined = Vec::new();
+            for (i, child) in children.into_iter().enumerate() {
+                if i > 0 {
+                    joined.push(
+                        widget::container(widget::Space::new())
+                            .width(Length::Fixed(1.0))
+                            .height(Length::Fixed(key_size))
+                            .class(cosmic::theme::Container::custom(move |_| {
+                                container::Style {
+                                    background: Some(Background::Color(color)),
+                                    ..Default::default()
+                                }
+                            }))
+                            .into(),
+                    );
                 }
-                joined
+                joined.push(child);
             }
+            joined
         }
     };
 
-    let has_row = !row.is_empty();
+    // Clip whatever runs past the window's far edge
     let row: Element<'a, M> = Reveal::new(
-        widget::row::with_children(join(row)).align_y(align),
+        widget::row::with_children(children).align_y(align),
         1.0,
-        slot_on_right,
+        edge_on_right,
     )
     .max_width(window)
     .into();
-    let ordered_children: Vec<Element<'a, M>> = match (has_row, slot_on_right) {
-        (false, _) => vec![slot],
-        (true, true) => join(vec![row, slot]),
-        (true, false) => join(vec![slot, row]),
-    };
 
-    let Some(rail) = theme.rail else {
-        return widget::row::with_children(ordered_children)
-            .align_y(align)
-            .into();
-    };
-    on_rail(
-        widget::row::with_children(ordered_children)
-            .align_y(iced::Alignment::Center)
-            .into(),
-        &rail,
-        rail_opacity,
-    )
+    match theme.rail {
+        None => row,
+        Some(rail) => on_rail(row, &rail, rail_opacity),
+    }
 }
 
-/// What's moving in the key row: a key leaving the slot, or the slot's held
-/// combination growing. The default is nothing moving.
+/// What's moving in the key row: a new keystroke arriving at the edge, or the
+/// held combination growing. The default is nothing moving.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Motion {
-    /// When the last keystroke left the slot for the row
+    /// When the newest keystroke appeared at the edge
     pub shifted_at: Option<Instant>,
-    /// When the held combination in the slot grew, and how many keys it had before
+    /// When the held combination grew, and how many keys it had before
     pub slot_grew: Option<(Instant, usize)>,
 }
 
-/// How long the slot takes to widen when a key joins the held combination
+/// How long a held combination takes to widen when a key joins it
 pub const SLOT_GROW_SECS: f32 = 0.18;
 
 /// Width of a keystroke with `parts` keys ("Ctrl + ⇧ + C" has three)
@@ -992,7 +971,7 @@ fn key_width(keystroke: &Keystroke, key_size: f32, theme: &Theme) -> f32 {
     parts_width(keystroke.keys.len(), key_size) + repeat
 }
 
-/// How long a key takes to move from the slot into the row
+/// How long a new keystroke takes to arrive at the edge
 pub const SLIDE_SECS: f32 = 0.3;
 
 /// The share of the slide spent opening room in the row, before the key arrives
