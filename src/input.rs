@@ -482,7 +482,7 @@ fn process_input_event(
             state: btn_state,
         } => {
             if let Ok(mut s) = state.lock() {
-                if !s.enabled || !s.show_mouse {
+                if !s.enabled || !s.show_tablet {
                     return;
                 }
                 button_event(&mut s, &label, btn_state);
@@ -598,6 +598,29 @@ fn process_input_event(
                 push_history(&mut s.history, keystroke);
             }
         }
+        InputEvent::TouchDown { slot, x, y } => {
+            if let Ok(mut s) = state.lock() {
+                if !s.enabled || !s.show_touch {
+                    return;
+                }
+                s.touch_down(slot, x, y);
+            }
+        }
+        InputEvent::TouchMotion { slot, x, y } => {
+            if let Ok(mut s) = state.lock() {
+                if !s.enabled || !s.show_touch {
+                    return;
+                }
+                s.touch_motion(slot, x, y);
+            }
+        }
+        InputEvent::TouchUp { slot } => {
+            if let Ok(mut s) = state.lock() {
+                // Always release, even if touch display was turned off mid-contact,
+                // so a marker can't get stuck on screen.
+                s.touch_up(slot);
+            }
+        }
     }
 }
 
@@ -631,29 +654,6 @@ fn button_event(s: &mut SharedState, label: &str, btn_state: ButtonState) {
                 Keystroke::single(final_str.to_string(), false)
             };
             push_history(&mut s.history, keystroke);
-        }
-        InputEvent::TouchDown { slot, x, y } => {
-            if let Ok(mut s) = state.lock() {
-                if !s.enabled || !s.show_touch {
-                    return;
-                }
-                s.touch_down(slot, x, y);
-            }
-        }
-        InputEvent::TouchMotion { slot, x, y } => {
-            if let Ok(mut s) = state.lock() {
-                if !s.enabled || !s.show_touch {
-                    return;
-                }
-                s.touch_motion(slot, x, y);
-            }
-        }
-        InputEvent::TouchUp { slot } => {
-            if let Ok(mut s) = state.lock() {
-                // Always release, even if touch display was turned off mid-contact,
-                // so a marker can't get stuck on screen.
-                s.touch_up(slot);
-            }
         }
     }
 }

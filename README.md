@@ -17,7 +17,8 @@ A key visualizer for [COSMIC DE](https://github.com/pop-os/cosmic-epoch). Shows 
 - Tablet pen taps, drags, eraser, barrel buttons, and pad buttons
 - System tray integration
 - Configurable position, size, colors, and ...
-- Multiple color palettes
+- Multiple color palettes, plus Mechanical and Mac keycap themes
+- Custom themes with your own icons and keycaps
 
 ## Requirements
 
@@ -84,3 +85,13 @@ Adding yourself to the `input` group grants read access to all input devices (`/
 
 ## Why Kiwi?
 It's a Key Visualizer!
+
+## Credits
+
+The Mechanical and Mac themes use artwork from other projects, each with its own license:
+
+- Keycaps from [Free Keyboard Graphics](https://github.com/q2apro/keyboard-keys-speedflips) by q2apro: public domain
+- Key legends from [Misonocons](https://github.com/misonoworks/misonocons) by MisonoWorks: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+- Mac keys from [SVG Keyboard Icons](https://github.com/georgemblack/svg-keyboard-icons) by George Black: MIT
+
+What was changed, and the full license texts, are in `data/themes/*/`. The settings window and the About page list them too.

@@ -23,6 +23,7 @@ const ICON_OFF_64: &[u8] = include_bytes!("../data/icons/kiwi-off-64.png");
 pub enum TrayAction {
     ShowSettings,
     ToggleActive,
+    Arrange,
     Quit,
 }
 
@@ -142,6 +143,7 @@ impl Tray for KiwiTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let tx_activate = self.tx.clone();
         let tx_deactivate = self.tx.clone();
+        let tx_arrange = self.tx.clone();
         let tx_settings = self.tx.clone();
         let tx_quit = self.tx.clone();
         let is_active = self.active;
@@ -167,6 +169,16 @@ impl Tray for KiwiTray {
                     log::info!("Menu: Deactivate clicked");
                     if let Err(e) = tx_deactivate.send(TrayAction::ToggleActive) {
                         log::error!("Failed to send ToggleActive: {}", e);
+                    }
+                }),
+                ..Default::default()
+            }),
+            MenuItem::Standard(StandardItem {
+                label: "Adjust on screen".to_string(),
+                activate: Box::new(move |_| {
+                    log::info!("Menu: Arrange clicked");
+                    if let Err(e) = tx_arrange.send(TrayAction::Arrange) {
+                        log::error!("Failed to send Arrange: {}", e);
                     }
                 }),
                 ..Default::default()
