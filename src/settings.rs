@@ -434,12 +434,10 @@ fn theme_card(
             widget::tooltip::Position::Top,
         )
     };
-    let mut label = widget::Row::new()
-        .align_y(Alignment::Center)
-        .push(widget::text::body(name).width(Length::Fill));
+    let mut actions = widget::Row::new().align_y(Alignment::Center);
     // Where the theme's artwork comes from, and its license
     for credit in &theme.credits {
-        label = label.push(widget::tooltip(
+        actions = actions.push(widget::tooltip(
             widget::button::icon(widget::icon::from_name("help-about-symbolic"))
                 .extra_small()
                 .on_press(Message::LaunchUrl(credit.url.clone())),
@@ -450,7 +448,7 @@ fn theme_card(
             widget::tooltip::Position::Top,
         ));
     }
-    let label = label
+    let actions = actions
         .push(action(
             "edit-symbolic",
             "Customize",
@@ -462,16 +460,27 @@ fn theme_card(
             Message::PreviewTheme(choice.clone()),
         ));
 
-    card(
-        widget::Column::new()
-            .spacing(4)
+    let label = widget::container(widget::text::body(name))
+        .height(Length::Fixed(24.0))
+        .align_y(cosmic::iced::alignment::Vertical::Center);
+    cosmic::iced::widget::stack![
+        card(
+            widget::Column::new()
+                .spacing(4)
+                .width(Length::Fill)
+                .push(preview)
+                .push(label),
+            selected,
+            false,
+        )
+        .on_press(Message::SelectTheme(choice.clone())),
+        widget::container(actions)
             .width(Length::Fill)
-            .push(preview)
-            .push(label),
-        selected,
-        false,
-    )
-    .on_press(Message::SelectTheme(choice.clone()))
+            .height(Length::Fill)
+            .padding(4)
+            .align_x(cosmic::iced::alignment::Horizontal::Right)
+            .align_y(cosmic::iced::alignment::Vertical::Bottom),
+    ]
     .into()
 }
 
